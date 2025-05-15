@@ -10,7 +10,7 @@ const wss = new WebSocket.Server({ server });
 
 // CORS配置
 app.use(cors({
-  origin: 'http://localhost:5173',
+  origin: 'https://qq.085410.xyz',
   credentials: true
 }));
 
