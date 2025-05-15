@@ -1,10 +1,13 @@
 {
   "name": "backend",
   "version": "1.0.0",
+  "scripts": {
+    "start": "node server.js",  
+    "build": "npm install"      
+  },
   "dependencies": {
     "express": "^4.18.3",
-    "ws": "^8.16.0",
     "cors": "^2.8.5",
-    "path-to-regexp": "^6.2.1"
+    "ws": "^8.16.0"
   }
 }
