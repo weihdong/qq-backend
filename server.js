@@ -4,8 +4,20 @@ const WebSocket = require('ws');
 const cors = require('cors');
 
 const app = express();
-app.use(express.json());
-app.use(cors());
+
+app.use(cors({
+    origin: 'https://qq.085410.xyz',
+    methods: ['POST', 'GET', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true,
+    preflightContinue: false,
+    optionsSuccessStatus: 204
+  }))
+  
+  // 显式处理OPTIONS请求
+  app.options('*', (req, res) => {
+    res.sendStatus(204)
+  })
 
 // ========== 数据库配置 ==========
 const MONGODB_URI = 'mongodb+srv://dwh:1122@cluster0.arkqevd.mongodb.net/Cluster0?retryWrites=true&w=majority';
