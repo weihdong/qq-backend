@@ -2,22 +2,20 @@ const express = require('express');
 const mongoose = require('mongoose');
 const WebSocket = require('ws');
 const cors = require('cors');
+const url = require('url');
 
 const app = express();
-
-app.use(cors({
-    origin: 'https://qq.085410.xyz',
-    methods: ['POST', 'GET', 'OPTIONS'],
+// ========== 增强CORS配置 ==========
+const corsOptions = {
+    origin: ['https://qq.085410.xyz', 'http://localhost:5173'], // 明确允许的前端地址
+    methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
-    preflightContinue: false,
-    optionsSuccessStatus: 204
-  }))
+    optionsSuccessStatus: 200
+  };
   
-  // 显式处理OPTIONS请求
-  app.options('*', (req, res) => {
-    res.sendStatus(204)
-  })
+  app.use(cors(corsOptions));
+  app.use(express.json());
 
 // ========== 数据库配置 ==========
 const MONGODB_URI = 'mongodb+srv://dwh:1122@cluster0.arkqevd.mongodb.net/Cluster0?retryWrites=true&w=majority';
@@ -46,7 +44,8 @@ const Message = mongoose.model('Message', messageSchema);
 // ========== 数据库连接 ==========
 mongoose.connect(MONGODB_URI, {
   useNewUrlParser: true,
-  useUnifiedTopology: true
+  useUnifiedTopology: true,
+  serverSelectionTimeoutMS: 5000 // 增加超时设置
 })
 .then(() => console.log('MongoDB连接成功'))
 .catch(err => {
@@ -56,6 +55,8 @@ mongoose.connect(MONGODB_URI, {
 
 // ========== REST API ==========
 // 登录/注册
+// 处理OPTIONS预检请求
+app.options('*', cors(corsOptions));
 app.post('/api/login', async (req, res) => {
   try {
     const { username, password } = req.body;
