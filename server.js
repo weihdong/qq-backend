@@ -6,13 +6,16 @@ const url = require('url');
 
 const app = express();
 // ========== 增强CORS配置 ==========
+// 更新 CORS 配置
 const corsOptions = {
-    origin: ['https://qq.085410.xyz', 'http://localhost:5173'], // 明确允许的前端地址
-    methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    origin: ['https://qq.085410.xyz', 'http://localhost:5173'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // 增加方法
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
     credentials: true,
+    preflightContinue: false, // 新增此项
     optionsSuccessStatus: 200
   };
+  
   
   app.use(cors(corsOptions));
   app.use(express.json());
@@ -277,3 +280,10 @@ process.on('uncaughtException', (err) => {
     console.error('未捕获异常:', err);
     process.exit(1);
 });
+
+// 在 server.js 中添加全局错误处理
+app.use((err, req, res, next) => {
+    console.error('全局错误:', err);
+    res.status(500).json({ error: '服务器错误' });
+  });
+  
