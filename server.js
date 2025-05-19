@@ -220,8 +220,8 @@ app.post('/api/login', async (req, res) => {
     }
 
     // 3. 高级验证
-    const usernameValid = /^[a-zA-Z0-9_]{3,20}$/.test(username);
-    const passwordValid = password.length >= 6 && password.length <= 100;
+    const usernameValid = /^[a-zA-Z0-9_]{2,20}$/.test(username);
+    const passwordValid = password.length >= 2 && password.length <= 20;
     
     if (!usernameValid || !passwordValid) {
       console.warn('[登录警告] 无效格式:', { usernameValid, passwordValid });
