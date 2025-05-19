@@ -3,7 +3,14 @@ const mongoose = require('mongoose');
 const WebSocket = require('ws');
 const cors = require('cors');
 const url = require('url');
-
+// 在文件顶部添加常量定义
+const HTTP_STATUS = {
+  BAD_REQUEST: 400,
+  UNAUTHORIZED: 401,
+  INTERNAL_ERROR: 500,
+  CREATED: 201,
+  OK: 200
+};
 // 初始化Express应用
 const app = express();
 
@@ -33,16 +40,13 @@ app.use((req, res, next) => {
 // ================== 数据库配置 ==================
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://dwh:1122@cluster0.arkqevd.mongodb.net/Cluster0?retryWrites=true&w=majority&appName=Cluster0';
 
-mongoose.connect(MONGODB_URI, {
-  serverSelectionTimeoutMS: 15000,
-  retryWrites: true,
-  w: 'majority'
-})
-.then(() => console.log('MongoDB连接成功'))
-.catch(err => {
-  console.error('MongoDB连接失败:', err.message);
-  process.exit(1);
-});
+// server.js 修改数据库连接部分
+mongoose.connect(MONGODB_URI)
+  .then(() => console.log('MongoDB连接成功'))
+  .catch(err => {
+    console.error('MongoDB连接失败:', err)
+    process.exit(1) // 确保连接失败时退出进程
+  })
 
 // ================== 数据模型 ==================
 const userSchema = new mongoose.Schema({
@@ -81,57 +85,89 @@ app.get('/health', (_req, res) => {  // 使用 _req 表示忽略参数
   });
 });
 
+
+
 app.post('/api/login', async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { username: rawUsername, password: rawPassword } = req.body;
+    const username = rawUsername?.trim();
+    const password = rawPassword?.trim();
+
+    // 增强输入验证
+    if (!username || !password) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        error: "用户名和密码不能为空",
+        code: "INVALID_INPUT"
+      });
+    }
+
+    if (username.length < 3 || username.length > 20) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        error: "用户名长度需在3-20个字符之间",
+        code: "INVALID_USERNAME"
+      });
+    }
+
+    if (password.length < 6) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        error: "密码长度至少需要6个字符",
+        code: "WEAK_PASSWORD"
+      });
+    }
+
+    // 检查用户是否存在
+    const existingUser = await User.findOne({ username }).select('+password');
     
-    // 强化输入验证
-    if (!username?.trim() || !password?.trim()) {
-      return res.status(400).json({
-        status: "error",
-        code: 400,
-        message: "用户名和密码不能为空"
-      });
-    }
-
-    const user = await User.findOne({ username: username.trim() });
-
-    if (!user) {
-      const newUser = await User.create({ 
-        username: username.trim(),
-        password: password.trim()
-      });
-      return res.status(201).json({
-        status: "success",
-        data: {
-          userId: newUser._id,
-          username: newUser.username
-        }
-      });
-    }
-
-    if (user.password !== password.trim()) {
-      return res.status(401).json({
-        status: "error",
-        code: 401,
-        message: "密码错误"
-      });
-    }
-
-    res.json({
-      status: "success",
-      data: {
-        userId: user._id,
-        username: user.username
+    if (existingUser) {
+      // 验证密码（使用bcrypt加密）
+      const isPasswordValid = await bcrypt.compare(password, existingUser.password);
+      
+      if (!isPasswordValid) {
+        return res.status(HTTP_STATUS.UNAUTHORIZED).json({
+          error: "密码错误",
+          code: "INVALID_CREDENTIALS"
+        });
       }
+
+      return res.status(HTTP_STATUS.OK).json({
+        userId: existingUser._id,
+        username: existingUser.username,
+        createdAt: existingUser.createdAt
+      });
+    }
+
+    // 创建新用户（自动注册）
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const newUser = await User.create({
+      username,
+      password: hashedPassword, // 存储加密后的密码
+      createdAt: new Date()
+    });
+
+    return res.status(HTTP_STATUS.CREATED).json({
+      userId: newUser._id,
+      username: newUser.username,
+      createdAt: newUser.createdAt
     });
 
   } catch (error) {
-    console.error('登录错误:', error);
-    res.status(500).json({
-      status: "error",
-      code: 500,
-      message: "服务器内部错误"
+    console.error('[登录错误]', {
+      error: error.stack,
+      timestamp: new Date().toISOString()
+    });
+
+    // 处理重复用户名错误
+    if (error.code === 11000) { // MongoDB重复键错误
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        error: "用户名已被占用",
+        code: "USERNAME_EXISTS"
+      });
+    }
+
+    return res.status(HTTP_STATUS.INTERNAL_ERROR).json({
+      error: "服务器内部错误，请稍后再试",
+      code: "SERVER_ERROR",
+      reference: error.referenceId || Date.now().toString(36) // 错误追踪ID
     });
   }
 });
@@ -227,3 +263,15 @@ process.on('uncaughtException', (err) => {
   console.error('💥 未捕获异常:', err.stack);
   process.exit(1);
 });
+
+// 在server.js最后添加
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('未处理的Promise拒绝:', reason)
+  // 可选：发送警报或进行优雅关闭
+})
+
+process.on('uncaughtException', (err) => {
+  console.error('未捕获异常:', err.stack)
+  // 优雅关闭
+  server.close(() => process.exit(1))
+})
