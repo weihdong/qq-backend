@@ -1,4 +1,4 @@
-// server.js 完整版
+// server.js 免令牌验证版
 process.on('warning', (warning) => {
   console.warn('⚠️ Node.js警告:', warning.stack);
 });
@@ -14,8 +14,6 @@ const mongoose = require('mongoose');
 const WebSocket = require('ws');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
-const crypto = require('crypto');
 
 const HTTP_STATUS = {
   BAD_REQUEST: 400,
@@ -72,56 +70,38 @@ mongoose.connect(MONGODB_URI, {
   process.exit(1);
 });
 
+// 用户模型
 const userSchema = new mongoose.Schema({
   username: { 
     type: String, 
-    required: [true, '用户名不能为空'], 
+    required: true,
     unique: true,
-    minlength: [3, '用户名至少需要3个字符'],
-    maxlength: [20, '用户名不能超过20个字符'],
+    minlength: 3,
+    maxlength: 20,
     trim: true,
-    validate: {
-      validator: function(v) {
-        return /^[a-zA-Z0-9_]+$/.test(v);
-      },
-      message: '只能包含字母、数字和下划线'
-    }
+    match: /^[a-zA-Z0-9_]+$/
   },
   password: {
     type: String,
-    required: [true, '密码不能为空'],
+    required: true,
     select: false,
-    minlength: [6, '密码至少需要6个字符']
+    minlength: 6
   },
   createdAt: {
     type: Date,
-    default: Date.now,
-    index: { expires: '730d' }
+    default: Date.now
   },
-  lastLogin: Date,
-  friends: [{ 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'User' 
-  }]
-}, {
-  versionKey: false,
-  toJSON: { 
-    virtuals: true,
-    transform: function(doc, ret) {
-      delete ret.password;
-      return ret;
-    }
-  }
-});
+  lastLogin: Date
+}, { versionKey: false });
 
 const User = mongoose.model('User', userSchema);
 
+// 好友模型
 const friendSchema = new mongoose.Schema({
   userId: { 
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'User', 
-    required: true,
-    index: true 
+    required: true 
   },
   friends: [{
     user: { 
@@ -129,99 +109,39 @@ const friendSchema = new mongoose.Schema({
       ref: 'User',
       required: true 
     },
-    nickname: String,
     addedAt: {
       type: Date,
       default: Date.now
     }
   }]
-}, {
-  timestamps: true
-});
+}, { timestamps: true });
 
 const Friend = mongoose.model('Friend', friendSchema);
 
-const messageSchema = new mongoose.Schema({
-  from: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'User', 
-    required: true,
-    index: true 
-  },
-  to: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'User', 
-    required: true,
-    index: true 
-  },
-  content: {
-    type: String,
-    required: true,
-    maxlength: [1000, '消息内容不能超过1000字符'],
-    trim: true
-  },
-  read: {
-    type: Boolean,
-    default: false
-  },
-  timestamp: { 
-    type: Date, 
-    default: Date.now,
-    index: true 
-  }
-}, {
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
-});
-
-messageSchema.virtual('formattedTime').get(function() {
-  return this.timestamp.toISOString();
-});
-
-const Message = mongoose.model('Message', messageSchema);
-
-const authenticateJWT = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (authHeader) {
-    const token = authHeader.split(' ')[1];
-    jwt.verify(token, process.env.JWT_SECRET || 'defaultSecret', (err, user) => {
-      if (err) return res.status(HTTP_STATUS.UNAUTHORIZED).json({ error: "无效令牌" });
-      req.user = user;
-      next();
-    });
-  } else {
-    res.status(HTTP_STATUS.UNAUTHORIZED).json({ error: "缺少认证令牌" });
-  }
-};
-
+// 登录/注册路由
 app.post('/api/login', async (req, res) => {
   try {
     const { username, password } = req.body;
+    
+    // 输入验证
     if (!username || !password) {
       return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "用户名和密码不能为空" });
     }
 
+    // 查找用户
     const user = await User.findOne({ username }).select('+password');
+    
+    // 用户存在验证密码
     if (user) {
       const valid = await bcrypt.compare(password, user.password);
       if (!valid) {
         console.warn(`[登录失败] 密码错误: ${username}`);
         return res.status(HTTP_STATUS.UNAUTHORIZED).json({ error: "认证失败" });
       }
-      
-      const token = jwt.sign(
-        { userId: user._id },
-        process.env.JWT_SECRET || 'defaultSecret',
-        { expiresIn: '7d' }
-      );
-      
-      return res.json({
-        userId: user._id,
-        username: user.username,
-        token
-      });
+      return res.json({ userId: user._id, username: user.username });
     }
 
+    // 注册新用户
     const hashedPassword = await bcrypt.hash(password, 12);
     const newUser = await User.create({
       username,
@@ -229,19 +149,13 @@ app.post('/api/login', async (req, res) => {
       lastLogin: new Date()
     });
 
+    // 初始化好友列表
     await Friend.create({ userId: newUser._id, friends: [] });
     console.log(`[新用户注册] ${username} ID:${newUser._id}`);
 
-    const token = jwt.sign(
-      { userId: newUser._id },
-      process.env.JWT_SECRET || 'defaultSecret',
-      { expiresIn: '7d' }
-    );
-
     res.status(HTTP_STATUS.CREATED).json({
       userId: newUser._id,
-      username: newUser.username,
-      token
+      username: newUser.username
     });
 
   } catch (error) {
@@ -250,33 +164,37 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-app.post('/api/friends', authenticateJWT, async (req, res) => {
+// 添加好友路由（无需令牌）
+app.post('/api/friends', async (req, res) => {
   try {
-    const { friendUsername } = req.body;
-    const userId = req.user.userId;
+    const { userId, friendUsername } = req.body;
 
-    if (!friendUsername) {
-      return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "需要提供好友用户名" });
+    // 参数验证
+    if (!userId || !friendUsername) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "缺少必要参数" });
     }
 
+    // 查找目标用户
     const friend = await User.findOne({ username: friendUsername });
     if (!friend) {
       return res.status(HTTP_STATUS.NOT_FOUND).json({ error: "用户不存在" });
     }
 
+    // 防止添加自己
     if (userId === friend._id.toString()) {
       return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "不能添加自己为好友" });
     }
 
-    const existingFriend = await Friend.findOne({
+    // 检查是否已是好友
+    const existing = await Friend.findOne({
       userId,
       'friends.user': friend._id
     });
-
-    if (existingFriend) {
+    if (existing) {
       return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "已是好友关系" });
     }
 
+    // 添加双向好友关系
     await Friend.updateOne(
       { userId },
       { $push: { friends: { user: friend._id } } },
@@ -301,30 +219,34 @@ app.post('/api/friends', authenticateJWT, async (req, res) => {
   }
 });
 
-app.get('/api/friends', authenticateJWT, async (req, res) => {
+// 获取好友列表
+app.get('/api/friends', async (req, res) => {
   try {
-    const userId = req.user.userId;
+    const { userId } = req.query;
+    
+    if (!userId) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "需要用户ID" });
+    }
+
     const friendList = await Friend.findOne({ userId })
       .populate('friends.user', 'username')
       .lean();
 
-    if (!friendList) {
-      return res.status(HTTP_STATUS.NOT_FOUND).json({ error: "好友列表未找到" });
-    }
-
-    const friends = friendList.friends.map(f => ({
+    const friends = friendList?.friends.map(f => ({
       id: f.user._id,
       username: f.user.username,
       addedAt: f.addedAt
-    }));
+    })) || [];
 
     res.json({ friends });
+
   } catch (error) {
     console.error('获取好友列表错误:', error);
-    res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "获取好友列表失败" });
+    res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "获取失败" });
   }
 });
 
+// 健康检查
 app.get('/health', (req, res) => {
   res.json({
     status: 'OK',
@@ -332,13 +254,14 @@ app.get('/health', (req, res) => {
   });
 });
 
+// 启动服务器
 const server = app.listen(process.env.PORT || 3000, '0.0.0.0', () => {
   console.log(`🚀 服务器运行中，端口：${server.address().port}`);
 });
 
+// WebSocket
 const wss = new WebSocket.Server({ server });
-
-wss.on('connection', (ws, req) => {
+wss.on('connection', (ws) => {
   ws.on('message', (message) => {
     wss.clients.forEach(client => {
       if (client !== ws && client.readyState === WebSocket.OPEN) {
@@ -348,6 +271,7 @@ wss.on('connection', (ws, req) => {
   });
 });
 
+// 优雅关闭
 const gracefulShutdown = () => {
   console.log('🛑 收到终止信号，开始清理...');
   server.close(async () => {
@@ -355,15 +279,12 @@ const gracefulShutdown = () => {
     console.log('✅ 资源清理完成');
     process.exit(0);
   });
-  setTimeout(() => {
-    console.error('⛔ 清理超时，强制退出');
-    process.exit(1);
-  }, 5000);
+  setTimeout(() => process.exit(1), 5000);
 };
-
 process.on('SIGTERM', gracefulShutdown);
 process.on('SIGINT', gracefulShutdown);
 
+// 全局错误处理
 app.use((err, req, res, next) => {
   console.error('⚠️ 全局错误:', err);
   res.status(500).json({ error: "服务器内部错误" });
