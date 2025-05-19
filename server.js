@@ -18,7 +18,7 @@ const corsOptions = {
   app.use(express.json());
 
 // ========== 数据库配置 ==========
-const MONGODB_URI = 'mongodb+srv://dwh:1122@cluster0.arkqevd.mongodb.net/Cluster0?retryWrites=true&w=majority';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://dwh:1122@cluster0.arkqevd.mongodb.net/Cluster0?retryWrites=true&w=majority&appName=Cluster0';
 
 // ========== 数据模型 ==========
 const userSchema = new mongoose.Schema({
