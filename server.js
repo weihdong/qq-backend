@@ -8,17 +8,28 @@ const app = express();
 // ========== 增强CORS配置 ==========
 // 更新 CORS 配置
 const corsOptions = {
-    origin: ['https://qq.085410.xyz', 'http://localhost:5173'],
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // 增加方法
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    origin: (origin, callback) => {
+      const allowedOrigins = [
+        'https://qq.085410.xyz',
+        'http://localhost:5173'
+      ];
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
+    methods: ['GET','POST','PUT','DELETE','OPTIONS'],
+    allowedHeaders: ['Content-Type','Authorization'],
     credentials: true,
-    preflightContinue: false, // 新增此项
-    optionsSuccessStatus: 200
+    preflightContinue: false,
+    optionsSuccessStatus: 204
   };
   
   
-  app.use(cors(corsOptions));
   app.use(express.json());
+  app.use(cors(corsOptions));
+  
 
 // ========== 数据库配置 ==========
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://dwh:1122@cluster0.arkqevd.mongodb.net/Cluster0?retryWrites=true&w=majority&appName=Cluster0';
@@ -46,10 +57,13 @@ const Message = mongoose.model('Message', messageSchema);
 
 // ========== 数据库连接 ==========
 mongoose.connect(MONGODB_URI, {
-  serverSelectionTimeoutMS: 10000, // 增加超时设置
-  retryWrites: true,
-  w: 'majority'
-})
+    serverSelectionTimeoutMS: 15000, // 延长至15秒
+    retryWrites: true,
+    w: 'majority',
+    retryReads: true,
+    connectTimeoutMS: 30000
+  })
+  
 .then(() => console.log('MongoDB连接成功'))
 .catch(err => {
   console.error('MongoDB连接失败:', err.message);
@@ -57,16 +71,12 @@ mongoose.connect(MONGODB_URI, {
 });
 // ========== 健康检查路由 ==========
 // 在数据库连接之后，其他路由之前添加
+app.get('/', (req, res) => {
+    res.send('Backend is running');
+  });
+  
 app.get('/health', (req, res) => {
-    // 添加进程保持心跳
-    if (global.healthCheckCounter === undefined) global.healthCheckCounter = 0;
-    global.healthCheckCounter++;
-    
-    res.json({
-        status: 'ok',
-        checks: global.healthCheckCounter
-    });
-      
+
     const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
     res.status(200).json({
       status: 'ok',
@@ -173,8 +183,9 @@ app.get('/api/messages', async (req, res) => {
 });
 
 // ========== WebSocket ==========
-const server = app.listen(process.env.PORT || 3000, '0.0.0.0', () => {
-  console.log(`服务器运行中，端口：${process.env.PORT || 3000}`);
+const PORT = process.env.PORT || 3000;
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`服务器运行中，端口：${PORT}`);
 });
 
 // WebSocket部分保持原有代码不变
