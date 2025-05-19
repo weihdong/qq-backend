@@ -25,7 +25,11 @@ app.options('*', cors(corsOptions));
 
 // 4. 请求体解析中间件（必须在路由之前）
 app.use(express.json({ limit: '10kb' }));
-
+// server.js
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`)
+  next()
+})
 // ================== 数据库配置 ==================
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://dwh:1122@cluster0.arkqevd.mongodb.net/Cluster0?retryWrites=true&w=majority&appName=Cluster0';
 
