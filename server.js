@@ -45,7 +45,9 @@ const Message = mongoose.model('Message', messageSchema);
 mongoose.connect(MONGODB_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
-  serverSelectionTimeoutMS: 5000 // 增加超时设置
+  serverSelectionTimeoutMS: 10000, // 增加超时设置
+  retryWrites: true,
+  w: 'majority'
 })
 .then(() => console.log('MongoDB连接成功'))
 .catch(err => {
@@ -167,18 +169,22 @@ const server = app.listen(process.env.PORT || 3000, () => {
 
 // WebSocket部分保持原有代码不变
 
-// 修改WebSocket服务配置
-const wss = new WebSocket.Server({
-    server,
-    verifyClient: (info, done) => {
-      const allowedOrigins = ['https://qq.085410.xyz', 'http://localhost:5173'];
-      if (allowedOrigins.includes(info.origin)) {
-        return done(true);
-      }
-      console.warn(`拒绝来源: ${info.origin}`);
-      return done(false, 403, 'Forbidden');
-    }
+// 替换原有 WebSocket 配置
+const wss = new WebSocket.Server({ noServer: true }); // 修改这里
+
+server.on('upgrade', (request, socket, head) => {
+  // 验证来源
+  const allowedOrigins = ['https://qq.085410.xyz', 'http://localhost:5173'];
+  if (!allowedOrigins.includes(request.headers.origin)) {
+    socket.destroy();
+    return;
+  }
+  
+  wss.handleUpgrade(request, socket, head, (ws) => {
+    wss.emit('connection', ws, request);
   });
+});
+
 const onlineUsers = new Map();
 
 wss.on('connection', (ws, req) => {
