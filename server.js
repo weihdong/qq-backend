@@ -163,7 +163,7 @@ app.get('/api/messages', async (req, res) => {
 });
 
 // ========== WebSocket ==========
-const server = app.listen(process.env.PORT || 3000, () => {
+const server = app.listen(process.env.PORT || 3000, '0.0.0.0', () => {
   console.log(`服务器运行中，端口：${process.env.PORT || 3000}`);
 });
 
