@@ -2,7 +2,13 @@
     "builds": [
       {
         "src": "server.js",
-        "use": "@railway/node"
+        "use": "@railway/node",
+        "config":{
+          "runtime": "node",
+          "engines": {
+            "node": ">=18"
+          }
+        }
       }
     ],
     "routes": [

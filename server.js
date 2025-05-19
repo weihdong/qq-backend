@@ -61,18 +61,19 @@ const messageSchema = new mongoose.Schema({
 });
 const Message = mongoose.model('Message', messageSchema);
 
-// ================== 路由定义 ==================
-app.get('/', (req, res) => {
+// 基础路由
+app.get('/', (_req, res) => {  // 使用 _req 表示忽略参数
   res.send('Backend is running');
 });
 
-app.get('/health', (req, res) => {
+// 健康检查
+app.get('/health', (_req, res) => {  // 使用 _req 表示忽略参数
   const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
-  res.status(200).json({
+  res.json({  // 自动设置200状态码
     status: 'ok',
     timestamp: new Date().toISOString(),
     database: dbStatus,
-    version: '1.0.1'
+    version: process.env.npm_package_version || '1.0.1'  // 动态获取版本号
   });
 });
 
@@ -139,16 +140,18 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 
 const wss = new WebSocket.Server({ noServer: true });
 
+// server.js 升级事件处理
 server.on('upgrade', (req, socket, head) => {
-  // 严格验证来源
-  if (!corsOptions.origin.includes(req.headers.origin)) {
-    return socket.destroy();
+  const origin = req.headers.origin
+  if (!corsOptions.origin.includes(origin)) {
+    console.log(`🚫 拒绝非法来源: ${origin}`)
+    return socket.destroy()
   }
   
   wss.handleUpgrade(req, socket, head, (ws) => {
-    wss.emit('connection', ws, req);
-  });
-});
+    wss.emit('connection', ws, req)
+  })
+})
 
 wss.on('connection', (ws, req) => {
   const query = url.parse(req.url, true).query;
