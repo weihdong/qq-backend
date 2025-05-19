@@ -52,7 +52,17 @@ mongoose.connect(MONGODB_URI, {
   console.error('MongoDB连接失败:', err.message);
   process.exit(1);
 });
-
+// ========== 健康检查路由 ==========
+// 在数据库连接之后，其他路由之前添加
+app.get('/health', (req, res) => {
+    const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
+    res.status(200).json({
+      status: 'ok',
+      timestamp: new Date(),
+      database: dbStatus,
+      version: '1.0.1'
+    });
+  });
 // ========== REST API ==========
 // 登录/注册
 // 处理OPTIONS预检请求
@@ -156,12 +166,26 @@ const server = app.listen(process.env.PORT || 3000, () => {
 });
 
 // WebSocket部分保持原有代码不变
-const wss = new WebSocket.Server({ server });
+
+// 修改WebSocket服务配置
+const wss = new WebSocket.Server({
+    server,
+    verifyClient: (info, done) => {
+      const allowedOrigins = ['https://qq.085410.xyz', 'http://localhost:5173'];
+      if (allowedOrigins.includes(info.origin)) {
+        return done(true);
+      }
+      console.warn(`拒绝来源: ${info.origin}`);
+      return done(false, 403, 'Forbidden');
+    }
+  });
 const onlineUsers = new Map();
 
 wss.on('connection', (ws, req) => {
   // 从查询参数获取userId
-  const userId = new URL(req.url, `http://${req.headers.host}`).searchParams.get('userId');
+  const query = url.parse(req.url, true).query;
+  const userId = query.userId;
+  
   ws.userId = userId;
   onlineUsers.set(userId, true);
   broadcastStatus(userId, true);
@@ -186,18 +210,36 @@ wss.on('connection', (ws, req) => {
     } catch (error) {
       console.error('消息处理错误:', error);
     }
-    const heartbeat = setInterval(() => {
+    // 修改心跳实现方式
+    let heartbeatInterval = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'heartbeat' }));
+        ws.ping(); // 使用标准ping
         }
-      }, 30000);
+    }, 25000);
     
-      // 连接关闭处理
-    ws.on('close', () => {
-    clearInterval(heartbeat);
-    onlineUsers.delete(userId);
-    broadcastStatus(userId, false);
+    ws.on('pong', () => {
+        // 收到pong响应
     });
+    
+    // 连接关闭时清理
+    ws.on('close', () => {
+        clearInterval(heartbeatInterval);
+        // ...其他清理代码...
+        onlineUsers.delete(userId);
+        broadcastStatus(userId, false);
+    });
+    // const heartbeat = setInterval(() => {
+    //     if (ws.readyState === WebSocket.OPEN) {
+    //       ws.send(JSON.stringify({ type: 'heartbeat' }));
+    //     }
+    //   }, 30000);
+    
+    //   // 连接关闭处理
+    // ws.on('close', () => {
+    // clearInterval(heartbeat);
+    // onlineUsers.delete(userId);
+    // broadcastStatus(userId, false);
+    // });
   });
 });
 // 广播状态变化
@@ -212,3 +254,13 @@ function broadcastStatus(userId, isOnline) {
       }
     });
   }
+// 捕获未处理的Promise拒绝
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('未处理的Promise拒绝:', reason);
+});
+
+// 捕获未处理的异常
+process.on('uncaughtException', (err) => {
+    console.error('未捕获异常:', err);
+    process.exit(1);
+});
