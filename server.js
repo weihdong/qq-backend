@@ -1,3 +1,15 @@
+// 在server.js开头添加
+process.on('warning', (warning) => {
+  console.warn('⚠️ Node.js警告:', warning.stack);
+});
+
+// 启动日志
+console.log('🛠️ 环境变量:', {
+  NODE_ENV: process.env.NODE_ENV,
+  PORT: process.env.PORT,
+  MONGODB_URI: process.env.MONGODB_URI ? '已配置' : '未配置'
+});
+
 const express = require('express');
 const mongoose = require('mongoose');
 const WebSocket = require('ws');
@@ -75,12 +87,12 @@ const messageSchema = new mongoose.Schema({ /* 原有内容 */ });
 const Message = mongoose.model('Message', messageSchema);
 
 // 7. 适配Railway的健康检查（关键修改）
-app.get('/railway-health', (req, res) => {
-  const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
-  res.status(dbStatus === 'connected' ? 200 : 503).json({
-    status: dbStatus,
-    timestamp: Date.now(),
-    service: 'chat-backend'
+// 专为Railway设计的健康检查
+app.get('/railway-healthz', (req, res) => {
+  const dbReady = mongoose.connection.readyState === 1;
+  res.status(dbReady ? 200 : 503).json({
+    db: dbReady ? 'ready' : 'down',
+    timestamp: Date.now()
   });
 });
 
@@ -173,8 +185,18 @@ wss.on('connection', (ws, req) => {
   // ...原有逻辑保持不变，增加心跳检测
   ws.isAlive = true;
   
+  const heartbeat = setInterval(() => {
+    if (!ws.isAlive) {
+      console.log(`💔 心跳丢失: ${ws.userId}`);
+      return ws.terminate();
+    }
+    ws.isAlive = false;
+    ws.ping();
+  }, 30000);
+
   ws.on('pong', () => {
     ws.isAlive = true;
+    console.log(`💓 心跳正常: ${ws.userId}`);
   });
 
   const interval = setInterval(() => {
@@ -184,7 +206,8 @@ wss.on('connection', (ws, req) => {
   }, 30000);
 
   ws.on('close', () => {
-    clearInterval(interval);
+    clearInterval(heartbeat);
+    console.log(`❌ 用户断开: ${ws.userId}`);
   });
 });
 
@@ -192,16 +215,23 @@ wss.on('connection', (ws, req) => {
 const gracefulShutdown = () => {
   console.log('🛑 收到终止信号，开始清理...');
   
+  // 1. 关闭HTTP服务器
   server.close(async () => {
+    // 2. 关闭WebSocket连接
+    wss.clients.forEach(client => client.close());
+    
+    // 3. 关闭数据库
     await mongoose.disconnect();
+    
     console.log('✅ 资源清理完成');
     process.exit(0);
   });
 
+  // 强制退出计时器
   setTimeout(() => {
-    console.error('⛔ 强制终止');
+    console.error('⛔ 清理超时，强制退出');
     process.exit(1);
-  }, 5000);
+  }, 8000);
 };
 
 process.on('SIGTERM', gracefulShutdown); // Railway终止信号
