@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const WebSocket = require('ws');
 const cors = require('cors');
 const url = require('url');
+const bcrypt = require('bcrypt');
 // 在文件顶部添加常量定义
 const HTTP_STATUS = {
   BAD_REQUEST: 400,
@@ -50,8 +51,22 @@ mongoose.connect(MONGODB_URI)
 
 // ================== 数据模型 ==================
 const userSchema = new mongoose.Schema({
-  username: { type: String, required: true, unique: true },
-  password: { type: String, required: true }
+  username: { 
+    type: String, 
+    required: true, 
+    unique: true,
+    minlength: 3,
+    maxlength: 20
+  },
+  password: {
+    type: String,
+    required: true,
+    select: false // 默认不返回密码字段
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
 });
 const User = mongoose.model('User', userSchema);
 
