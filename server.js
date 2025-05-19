@@ -43,8 +43,6 @@ const Message = mongoose.model('Message', messageSchema);
 
 // ========== 数据库连接 ==========
 mongoose.connect(MONGODB_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
   serverSelectionTimeoutMS: 10000, // 增加超时设置
   retryWrites: true,
   w: 'majority'
@@ -57,6 +55,15 @@ mongoose.connect(MONGODB_URI, {
 // ========== 健康检查路由 ==========
 // 在数据库连接之后，其他路由之前添加
 app.get('/health', (req, res) => {
+    // 添加进程保持心跳
+    if (global.healthCheckCounter === undefined) global.healthCheckCounter = 0;
+    global.healthCheckCounter++;
+    
+    res.json({
+        status: 'ok',
+        checks: global.healthCheckCounter
+    });
+      
     const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
     res.status(200).json({
       status: 'ok',
