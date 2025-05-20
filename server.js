@@ -18,6 +18,7 @@ const HTTP_STATUS = {
   BAD_REQUEST: 400,
   UNAUTHORIZED: 401,
   NOT_FOUND: 404,
+  CONFLICT: 409,
   INTERNAL_ERROR: 500,
   CREATED: 201,
   OK: 200
@@ -179,6 +180,17 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+// 新增用户信息接口
+app.get('/api/user/:id', async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id).select('username');
+    if (!user) return res.status(HTTP_STATUS.NOT_FOUND).json({ error: "用户不存在" });
+    res.status(HTTP_STATUS.OK).json(user);
+  } catch (error) {
+    console.error('获取用户信息错误:', error);
+    res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "服务器错误" });
+  }
+});
 // 获取好友列表
 app.get('/api/friends', async (req, res) => {
   try {
@@ -228,7 +240,6 @@ app.post('/api/friends', async (req, res) => {
   try {
     const { userId, friendUsername } = req.body;
 
-    // 参数校验增强
     if (!userId || !friendUsername) {
       return res.status(HTTP_STATUS.BAD_REQUEST).json({ 
         error: "缺少必要参数",
@@ -236,7 +247,6 @@ app.post('/api/friends', async (req, res) => {
       });
     }
 
-    // 用户存在性验证
     const currentUser = await User.findById(userId);
     if (!currentUser) {
       return res.status(HTTP_STATUS.NOT_FOUND).json({
@@ -253,7 +263,6 @@ app.post('/api/friends', async (req, res) => {
       });
     }
 
-    // 防止自添加
     if (userId === friendUser._id.toString()) {
       return res.status(HTTP_STATUS.BAD_REQUEST).json({
         error: "不能添加自己为好友",
@@ -261,24 +270,21 @@ app.post('/api/friends', async (req, res) => {
       });
     }
 
-    // 检查是否已是好友
     const existingFriend = await Friend.findOne({
       userId,
       'friends.user': friendUser._id
     });
     if (existingFriend) {
-      return res.status(HTTP_STATUS.CONFLICT).json({
+      return res.status(HTTP_STATUS.CONFLICT).json({ // 使用已定义的CONFLICT状态码
         error: "已是好友关系",
         code: "ALREADY_FRIENDS"
       });
     }
 
-    // 事务处理
     const session = await mongoose.startSession();
     session.startTransaction();
     
     try {
-      // 添加双向好友关系
       await Friend.updateOne(
         { userId },
         { $addToSet: { friends: { user: friendUser._id } } },
@@ -301,7 +307,12 @@ app.post('/api/friends', async (req, res) => {
 
     } catch (error) {
       await session.abortTransaction();
-      throw error;
+      console.error('事务执行失败:', error);
+      return res.status(HTTP_STATUS.INTERNAL_ERROR).json({ 
+        error: "添加好友失败",
+        code: "ADD_FRIEND_FAILED",
+        details: error.message 
+      });
     } finally {
       session.endSession();
     }
