@@ -316,6 +316,7 @@ app.post('/api/friends', async (req, res) => {
   }
 });
 // WebSocket处理
+// WebSocket处理
 const server = app.listen(process.env.PORT || 3000, '0.0.0.0', () => {
   console.log(`🚀 服务器运行中，端口：${server.address().port}`);
 });
@@ -323,11 +324,33 @@ const server = app.listen(process.env.PORT || 3000, '0.0.0.0', () => {
 const wss = new WebSocket.Server({ server });
 const onlineUsers = new Map();
 const HEARTBEAT_INTERVAL = 30;
+
+// 新增：好友状态广播函数
+const broadcastFriendStatus = async (userId, isOnline) => {
+  try {
+    const friendList = await Friend.findOne({ userId });
+    if (friendList) {
+      friendList.friends.forEach(friend => {
+        const friendWs = onlineUsers.get(friend.user.toString());
+        if (friendWs) {
+          friendWs.send(JSON.stringify({
+            type: 'status',
+            userId,
+            online: isOnline
+          }));
+        }
+      });
+    }
+  } catch (error) {
+    console.error('状态广播错误:', error);
+  }
+};
+
 wss.on('connection', (ws, req) => {
   let userId = null;
   let isAlive = true;
 
-    // 心跳检测
+  // 心跳检测
   const heartbeat = () => {
     if (!isAlive) {
       console.log(`💔 心跳丢失: ${userId}`);
@@ -347,8 +370,14 @@ wss.on('connection', (ws, req) => {
   ws.on('message', async (message) => {
     try {
       const msgData = JSON.parse(message);
-      // 处理连接请求
+      
+      // 合并处理 connect 类型消息
       if (msgData.type === 'connect') {
+        // 清理旧连接
+        if (userId && onlineUsers.get(userId) === ws) {
+          onlineUsers.delete(userId);
+        }
+        
         userId = msgData.userId;
         onlineUsers.set(userId, ws);
         ws.userId = userId;
@@ -358,7 +387,12 @@ wss.on('connection', (ws, req) => {
           type: 'system',
           message: 'CONNECTED'
         }));
+
+        // 广播在线状态
+        await broadcastFriendStatus(userId, true);
+        return;
       }
+
       // 处理消息
       if (msgData.type === 'message') {
         const newMessage = new Message({
@@ -369,9 +403,9 @@ wss.on('connection', (ws, req) => {
         await newMessage.save();
 
         // 广播消息
-        wss.clients.forEach(client => {
-          if (client.readyState === WebSocket.OPEN && 
-            (client.userId === msgData.to || client.userId === msgData.from)) {
+        [msgData.to, msgData.from].forEach(targetId => {
+          const client = onlineUsers.get(targetId);
+          if (client && client.readyState === WebSocket.OPEN) {
             client.send(JSON.stringify({
               type: 'message',
               ...newMessage.toJSON()
@@ -379,52 +413,16 @@ wss.on('connection', (ws, req) => {
           }
         });
       }
-      
-      // 处理用户连接
-      if (msgData.type === 'connect') {
-        userId = msgData.userId;
-        onlineUsers.set(userId, ws);
-        ws.userId = userId;
-        
-        // 通知好友在线状态
-        const friendList = await Friend.findOne({ userId });
-        if (friendList) {
-          friendList.friends.forEach(friend => {
-            const friendWs = onlineUsers.get(friend.user.toString());
-            if (friendWs) {
-              friendWs.send(JSON.stringify({
-                type: 'status',
-                userId,
-                online: true
-              }));
-            }
-          });
-        }
-      }
     } catch (error) {
       console.error('WebSocket消息处理错误:', error);
     }
   });
 
-  ws.on('close', () => {
+  ws.on('close', async () => {
     clearInterval(interval);
     if (userId) {
       onlineUsers.delete(userId);
-      // 通知好友离线状态
-      Friend.findOne({ userId }).then(friendList => {
-        if (friendList) {
-          friendList.friends.forEach(friend => {
-            const friendWs = onlineUsers.get(friend.user.toString());
-            if (friendWs) {
-              friendWs.send(JSON.stringify({
-                type: 'status',
-                userId,
-                online: false
-              }));
-            }
-          });
-        }
-      });
+      await broadcastFriendStatus(userId, false);
     }
   });
 });
