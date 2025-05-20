@@ -231,14 +231,43 @@ const server = app.listen(process.env.PORT || 3000, '0.0.0.0', () => {
 
 const wss = new WebSocket.Server({ server });
 const onlineUsers = new Map();
-
+const HEARTBEAT_INTERVAL = 30;
 wss.on('connection', (ws, req) => {
   let userId = null;
+  let isAlive = true;
+
+    // 心跳检测
+  const heartbeat = () => {
+    if (!isAlive) {
+      console.log(`💔 心跳丢失: ${userId}`);
+      return ws.terminate();
+    }
+    isAlive = false;
+    ws.ping();
+  };
+
+  const interval = setInterval(heartbeat, HEARTBEAT_INTERVAL * 1000);
+
+  ws.on('pong', () => {
+    isAlive = true;
+    console.log(`💓 心跳正常: ${userId}`);
+  });
 
   ws.on('message', async (message) => {
     try {
       const msgData = JSON.parse(message);
-      
+      // 处理连接请求
+      if (msgData.type === 'connect') {
+        userId = msgData.userId;
+        onlineUsers.set(userId, ws);
+        ws.userId = userId;
+
+        // 发送连接确认
+        ws.send(JSON.stringify({
+          type: 'system',
+          message: 'CONNECTED'
+        }));
+      }
       // 处理消息
       if (msgData.type === 'message') {
         const newMessage = new Message({
@@ -287,6 +316,7 @@ wss.on('connection', (ws, req) => {
   });
 
   ws.on('close', () => {
+    clearInterval(interval);
     if (userId) {
       onlineUsers.delete(userId);
       // 通知好友离线状态
