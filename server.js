@@ -223,7 +223,98 @@ app.get('/api/messages', async (req, res) => {
     res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "获取消息失败" });
   }
 });
+// 添加好友路由（最终修正版）
+app.post('/api/friends', async (req, res) => {
+  try {
+    const { userId, friendUsername } = req.body;
 
+    // 参数校验增强
+    if (!userId || !friendUsername) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({ 
+        error: "缺少必要参数",
+        code: "MISSING_PARAMETERS" 
+      });
+    }
+
+    // 用户存在性验证
+    const currentUser = await User.findById(userId);
+    if (!currentUser) {
+      return res.status(HTTP_STATUS.NOT_FOUND).json({
+        error: "用户不存在",
+        code: "USER_NOT_FOUND"
+      });
+    }
+
+    const friendUser = await User.findOne({ username: friendUsername });
+    if (!friendUser) {
+      return res.status(HTTP_STATUS.NOT_FOUND).json({ 
+        error: "目标用户不存在",
+        code: "FRIEND_NOT_FOUND" 
+      });
+    }
+
+    // 防止自添加
+    if (userId === friendUser._id.toString()) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        error: "不能添加自己为好友",
+        code: "SELF_ADDITION"
+      });
+    }
+
+    // 检查是否已是好友
+    const existingFriend = await Friend.findOne({
+      userId,
+      'friends.user': friendUser._id
+    });
+    if (existingFriend) {
+      return res.status(HTTP_STATUS.CONFLICT).json({
+        error: "已是好友关系",
+        code: "ALREADY_FRIENDS"
+      });
+    }
+
+    // 事务处理
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    
+    try {
+      // 添加双向好友关系
+      await Friend.updateOne(
+        { userId },
+        { $addToSet: { friends: { user: friendUser._id } } },
+        { upsert: true, session }
+      );
+
+      await Friend.updateOne(
+        { userId: friendUser._id },
+        { $addToSet: { friends: { user: userId } } },
+        { upsert: true, session }
+      );
+
+      await session.commitTransaction();
+      
+      res.status(HTTP_STATUS.CREATED).json({
+        message: "添加好友成功",
+        friendId: friendUser._id,
+        username: friendUser.username
+      });
+
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
+    }
+
+  } catch (error) {
+    console.error('添加好友错误:', error);
+    res.status(HTTP_STATUS.INTERNAL_ERROR).json({ 
+      error: "添加好友失败",
+      code: "ADD_FRIEND_FAILED",
+      details: error.message 
+    });
+  }
+});
 // WebSocket处理
 const server = app.listen(process.env.PORT || 3000, '0.0.0.0', () => {
   console.log(`🚀 服务器运行中，端口：${server.address().port}`);
