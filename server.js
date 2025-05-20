@@ -1,4 +1,3 @@
-// 最终修复版server.js完整代码
 process.on('warning', (warning) => {
   console.warn('⚠️ Node.js警告:', warning.stack);
 });
@@ -26,7 +25,6 @@ const HTTP_STATUS = {
 
 const app = express();
 
-// CORS配置（最终修正版）
 const allowedOrigins = [
   'https://qq.085410.xyz',
   'https://qq-rust.vercel.app',
@@ -106,7 +104,32 @@ const friendSchema = new mongoose.Schema({
 
 const Friend = mongoose.model('Friend', friendSchema);
 
-// 登录路由（最终修正版）
+// 消息模型
+const messageSchema = new mongoose.Schema({
+  from: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  to: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  content: {
+    type: String,
+    required: true,
+    maxlength: 1000
+  },
+  timestamp: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+const Message = mongoose.model('Message', messageSchema);
+
+// 登录路由
 app.post('/api/login', async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -115,7 +138,6 @@ app.post('/api/login', async (req, res) => {
       return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "用户名和密码不能为空" });
     }
 
-    // 用户名格式验证
     if (!/^[a-zA-Z0-9_]{3,20}$/.test(username)) {
       return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "用户名格式无效" });
     }
@@ -130,14 +152,9 @@ app.post('/api/login', async (req, res) => {
       }
       
       await User.updateOne({ _id: user._id }, { lastLogin: new Date() });
-      
-      return res.json({
-        userId: user._id,
-        username: user.username
-      });
+      return res.json({ userId: user._id, username: user.username });
     }
 
-    // 新用户注册
     const hashedPassword = await bcrypt.hash(password, 12);
     const newUser = await User.create({
       username,
@@ -154,97 +171,144 @@ app.post('/api/login', async (req, res) => {
     });
 
   } catch (error) {
-    // 移除crypto后的错误处理
-    console.error('[登录错误]', {
-      error: error.stack,
-      input: { username: req.body.username, password: '***' }
-    });
-
+    console.error('[登录错误]', error.stack);
     if (error.name === 'MongoServerError' && error.code === 11000) {
       return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "用户名已被占用" });
     }
-
     res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "服务器错误" });
   }
 });
 
-// 添加好友路由（最终修正版）
-app.post('/api/friends', async (req, res) => {
+// 获取好友列表
+app.get('/api/friends', async (req, res) => {
   try {
-    const { userId, friendUsername } = req.body;
+    const { userId } = req.query;
+    if (!userId) return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "需要用户ID" });
 
-    if (!userId || !friendUsername) {
-      return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "缺少必要参数" });
-    }
+    const friendList = await Friend.findOne({ userId })
+      .populate('friends.user', 'username')
+      .lean();
 
-    const friend = await User.findOne({ username: friendUsername });
-    if (!friend) {
-      return res.status(HTTP_STATUS.NOT_FOUND).json({ error: "用户不存在" });
-    }
+    if (!friendList) return res.json({ friends: [] });
 
-    if (userId === friend._id.toString()) {
-      return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "不能添加自己为好友" });
-    }
+    const friends = friendList.friends.map(f => ({
+      _id: f.user._id,
+      username: f.user.username,
+      addedAt: f.addedAt
+    }));
 
-    const existing = await Friend.findOne({
-      userId,
-      'friends.user': friend._id
-    });
-    if (existing) {
-      return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "已是好友关系" });
-    }
-
-    // 添加好友关系
-    await Friend.updateOne(
-      { userId },
-      { $push: { friends: { user: friend._id } } },
-      { upsert: true }
-    );
-
-    res.status(HTTP_STATUS.CREATED).json({
-      message: "添加好友成功",
-      friendId: friend._id,
-      username: friend.username
-    });
-
+    res.json({ friends });
   } catch (error) {
-    console.error('添加好友错误:', error);
-    res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "添加好友失败" });
+    console.error('获取好友列表错误:', error);
+    res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "获取失败" });
   }
 });
 
-// 其他路由保持不变...
+// 获取消息记录
+app.get('/api/messages', async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    if (!from || !to) return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "缺少参数" });
 
+    const messages = await Message.find({
+      $or: [
+        { from, to },
+        { from: to, to: from }
+      ]
+    }).sort({ timestamp: 1 }).lean();
+
+    res.json(messages);
+  } catch (error) {
+    console.error('获取消息错误:', error);
+    res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "获取消息失败" });
+  }
+});
+
+// WebSocket处理
 const server = app.listen(process.env.PORT || 3000, '0.0.0.0', () => {
   console.log(`🚀 服务器运行中，端口：${server.address().port}`);
 });
 
-// 前端需要修改部分（示例）
-/*
-1. 登录成功后保存userId：
-localStorage.setItem('userId', data.userId);
-
-2. 所有需要用户认证的请求都需携带userId：
-fetch('/api/friends', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    userId: localStorage.getItem('userId'),
-    friendUsername: '目标用户名'
-  })
-})
-*/
-
 const wss = new WebSocket.Server({ server });
-wss.on('connection', (ws) => {
-  ws.on('message', (message) => {
-    wss.clients.forEach(client => {
-      if (client !== ws && client.readyState === WebSocket.OPEN) {
-        client.send(message);
+const onlineUsers = new Map();
+
+wss.on('connection', (ws, req) => {
+  let userId = null;
+
+  ws.on('message', async (message) => {
+    try {
+      const msgData = JSON.parse(message);
+      
+      // 处理消息
+      if (msgData.type === 'message') {
+        const newMessage = new Message({
+          from: msgData.from,
+          to: msgData.to,
+          content: msgData.content
+        });
+        await newMessage.save();
+
+        // 广播消息
+        wss.clients.forEach(client => {
+          if (client.readyState === WebSocket.OPEN && 
+            (client.userId === msgData.to || client.userId === msgData.from)) {
+            client.send(JSON.stringify({
+              type: 'message',
+              ...newMessage.toJSON()
+            }));
+          }
+        });
       }
-    });
+      
+      // 处理用户连接
+      if (msgData.type === 'connect') {
+        userId = msgData.userId;
+        onlineUsers.set(userId, ws);
+        ws.userId = userId;
+        
+        // 通知好友在线状态
+        const friendList = await Friend.findOne({ userId });
+        if (friendList) {
+          friendList.friends.forEach(friend => {
+            const friendWs = onlineUsers.get(friend.user.toString());
+            if (friendWs) {
+              friendWs.send(JSON.stringify({
+                type: 'status',
+                userId,
+                online: true
+              }));
+            }
+          });
+        }
+      }
+    } catch (error) {
+      console.error('WebSocket消息处理错误:', error);
+    }
+  });
+
+  ws.on('close', () => {
+    if (userId) {
+      onlineUsers.delete(userId);
+      // 通知好友离线状态
+      Friend.findOne({ userId }).then(friendList => {
+        if (friendList) {
+          friendList.friends.forEach(friend => {
+            const friendWs = onlineUsers.get(friend.user.toString());
+            if (friendWs) {
+              friendWs.send(JSON.stringify({
+                type: 'status',
+                userId,
+                online: false
+              }));
+            }
+          });
+        }
+      });
+    }
   });
 });
+
+// 其他中间件和路由...
 
 // 优雅关闭
 const gracefulShutdown = () => {
