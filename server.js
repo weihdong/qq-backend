@@ -104,8 +104,6 @@ const friendSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 const Friend = mongoose.model('Friend', friendSchema);
-const multer = require('multer');
-const upload = multer({ dest: 'uploads/' });
 
 // 消息模型
 const messageSchema = new mongoose.Schema({
@@ -124,16 +122,17 @@ const messageSchema = new mongoose.Schema({
     required: true,
     maxlength: 1000
   },
+  type: {
+    type: String,
+    default: 'text',
+    enum: ['text', 'image', 'voice']
+  },
   timestamp: {
     type: Date,
     default: Date.now
-  },
-  type: {
-    type: String,
-    enum: ['text', 'image', 'voice'],
-    default: 'text'
   }
 });
+ 
 
 const Message = mongoose.model('Message', messageSchema);
 
@@ -334,18 +333,30 @@ app.post('/api/friends', async (req, res) => {
   }
 });
 
-app.post('/api/upload', upload.single('file'), (req, res) => {
+app.post('/api/upload', async (req, res) => {
   try {
-    if(!req.file) {
-      return res.status(400).json({ error: "未上传文件" });
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ error: '没有上传文件' });
     }
-    const fileUrl = `mongodb+srv://dwh:1122@cluster0.arkqevd.mongodb.net/Cluster0?retryWrites=true&w=majority&appName=Cluster0`;
-    res.status(200).json({ url: fileUrl });
-  }catch (error) {
-    console.error('文件上传错误', error);
-    res.status(500).json({ error: "上传失败" });
-  }
-});
+
+    // 将文件上传到Cloudflare R2
+    const r2 = require('@cloudflare/r2');
+    const bucket = r2(process.env.R2_BUCKET || 'your-bucket-name');
+
+    const stream = fs.createReadStream(file.path);
+    const key = `
+ 
+
+${Date.now()}-$ {file.originalname}`;
+
+ 
+   await bucket.put(key, stream, {
+     contentType: file.mimetype,
+     cacheControl: 'max-age=31536000, public' // 设置缓存策略
+   });
+
+   const fileUrl = `https://${process.env.R2_BUCKET}.r2.cloudflarestorage.com/$ {key}`; res.json({ url: fileUrl }); } catch (error) { console.error('上传失败:', error); res.status(500).json({ error: '文件上传失败' }); } });
 // WebSocket处理
 // WebSocket处理
 const server = app.listen(process.env.PORT || 3000, '0.0.0.0', () => {
@@ -425,12 +436,11 @@ wss.on('connection', (ws, req) => {
       }
 
       // 处理消息
-      if (msgData.type === 'message' || msgData.type === 'image' || msgData.type === 'voice' || msgData.type === 'text') {
+      if (msgData.type === 'message') {
         const newMessage = new Message({
           from: msgData.from,
           to: msgData.to,
-          content: msgData.content,
-          type: msgData.type
+          content: msgData.content
         });
         await newMessage.save();
 
