@@ -341,13 +341,16 @@ const wss = new WebSocket.Server({ server });
 const onlineUsers = new Map();
 const HEARTBEAT_INTERVAL = 30;
 
-// 新增：好友状态广播函数
+// 改进状态广播函数
 const broadcastFriendStatus = async (userId, isOnline) => {
   try {
     const friendList = await Friend.findOne({ userId });
     if (friendList) {
-      friendList.friends.forEach(friend => {
-        const friendWs = onlineUsers.get(friend.user.toString());
+      const broadcastPromises = friendList.friends.map(async friend => {
+        const friendId = friend.user.toString();
+        
+        // 广播给好友
+        const friendWs = onlineUsers.get(friendId);
         if (friendWs) {
           friendWs.send(JSON.stringify({
             type: 'status',
@@ -355,7 +358,19 @@ const broadcastFriendStatus = async (userId, isOnline) => {
             online: isOnline
           }));
         }
+        
+        // 广播给自己（更新好友的在线状态）
+        const selfWs = onlineUsers.get(userId);
+        if (selfWs) {
+          selfWs.send(JSON.stringify({
+            type: 'status',
+            userId: friendId,
+            online: onlineUsers.has(friendId) // 实时状态
+          }));
+        }
       });
+      
+      await Promise.all(broadcastPromises);
     }
   } catch (error) {
     console.error('状态广播错误:', error);
@@ -386,7 +401,10 @@ wss.on('connection', (ws, req) => {
   ws.on('message', async (message) => {
     try {
       const msgData = JSON.parse(message);
-      
+      if (msgData.type === 'ping') {
+        ws.send(JSON.stringify({type: 'pong'}));
+        return;
+      }
       // 合并处理 connect 类型消息
       if (msgData.type === 'connect') {
         // 清理旧连接
@@ -415,7 +433,8 @@ wss.on('connection', (ws, req) => {
           from: msgData.from,
           to: msgData.to,
           content: msgData.content,
-          type: msgData.type
+          type: msgData.type,
+          timestamp: new Date(msgData.timestamp)
         });
         await newMessage.save();
 
