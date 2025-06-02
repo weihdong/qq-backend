@@ -410,7 +410,7 @@ wss.on('connection', (ws, req) => {
       }
 
       // 处理消息
-      if (['test', 'image', 'audio'].includes(msgData.type)) {
+      if (msgData.type === 'test' || msgData.type === 'image' || msgData.type === 'audio') {
         const newMessage = new Message({
           from: msgData.from,
           to: msgData.to,
@@ -425,7 +425,7 @@ wss.on('connection', (ws, req) => {
           if (client && client.readyState === WebSocket.OPEN) {
             client.send(JSON.stringify({
               ...newMessage.toJSON(),
-              type: 'message'
+              type: msgData.type
             }));
           }
         });
