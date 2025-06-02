@@ -341,9 +341,11 @@ const wss = new WebSocket.Server({ server });
 const onlineUsers = new Map();
 const HEARTBEAT_INTERVAL = 30;
 
-// 修正广播函数
+// server.js - 替换 broadcastFriendStatus 函数
 const broadcastFriendStatus = async (userId, isOnline) => {
   try {
+    console.log(`📢 广播状态: ${userId} -> ${isOnline ? '在线' : '离线'}`);
+    
     const friendList = await Friend.findOne({ userId }).populate('friends.user');
     if (!friendList) return;
     
@@ -358,105 +360,146 @@ const broadcastFriendStatus = async (userId, isOnline) => {
         friendWs.send(JSON.stringify({
           type: 'status-update',
           userId: userIdStr,
-          status: isOnline
+          status: isOnline,
+          timestamp: new Date().toISOString()
         }));
+        console.log(`   ➤ 发送给: ${friendId}`);
       }
     });
   } catch (error) {
-    console.error('状态广播错误:', error);
+    console.error('❌ 状态广播错误:', error);
   }
 };
 
+// server.js - 替换整个 wss.on('connection') 部分
+
+// WebSocket处理
 wss.on('connection', (ws, req) => {
-  let userId = null;
-  let isAlive = true;
-  let heartbeatInterval;
-
-  // 心跳检测
-  const heartbeat = () => {
-    if (!isAlive) {
-      console.log(`💔 心跳丢失: ${userId}`);
-      return ws.terminate();
+  console.log('🔌 新WebSocket连接请求');
+  
+  // 从URL参数获取userId
+  const urlParams = new URLSearchParams(req.url.split('?')[1]);
+  const userId = urlParams.get('userId');
+  
+  if (!userId) {
+    console.log('❌ 未提供userId，关闭连接');
+    ws.close(4001, 'Missing userId');
+    return;
+  }
+  
+  // 验证用户ID
+  User.findById(userId).then(user => {
+    if (!user) {
+      console.log(`❌ 无效用户ID: ${userId}`);
+      ws.close(4002, 'Invalid user ID');
+      return;
     }
-    isAlive = false;
-    ws.ping();
-  };
-
-  const interval = setInterval(heartbeat, HEARTBEAT_INTERVAL * 1000);
-
-  ws.on('pong', () => {
-    isAlive = true;
-    console.log(`💓 心跳正常: ${userId}`);
-  });
-
-  ws.on('message', async (message) => {
-    try {
-      const msgData = JSON.parse(message);
-      if (msgData.type === 'ping') {
-        ws.send(JSON.stringify({type: 'pong'}));
-        return;
+    
+    console.log(`🟢 用户连接: ${user.username} (${userId})`);
+    
+    // 清理旧连接（如果存在）
+    const existingConnection = onlineUsers.get(userId);
+    if (existingConnection && existingConnection.readyState === WebSocket.OPEN) {
+      console.log(`♻️ 关闭重复连接: ${userId}`);
+      existingConnection.close(4003, 'Duplicate connection');
+    }
+    
+    // 存储新连接
+    onlineUsers.set(userId, ws);
+    ws.userId = userId;
+    
+    // 发送连接确认
+    ws.send(JSON.stringify({
+      type: 'system',
+      message: 'CONNECTED',
+      timestamp: new Date().toISOString()
+    }));
+    
+    // 广播在线状态
+    broadcastFriendStatus(userId, true);
+    
+    // 心跳检测
+    let isAlive = true;
+    let heartbeatInterval;
+    
+    const heartbeat = () => {
+      if (!isAlive) {
+        console.log(`💔 心跳丢失: ${userId}`);
+        return ws.terminate();
       }
-      // 合并处理 connect 类型消息
-      if (msgData.type === 'connect') {
-        // 清理旧连接
-        if (userId && onlineUsers.get(userId) === ws) {
-          onlineUsers.delete(userId);
+      isAlive = false;
+      ws.ping();
+    };
+    
+    heartbeatInterval = setInterval(heartbeat, HEARTBEAT_INTERVAL * 1000);
+    
+    ws.on('pong', () => {
+      isAlive = true;
+      console.log(`💓 心跳正常: ${userId}`);
+    });
+    
+    // 消息处理
+    ws.on('message', async (message) => {
+      try {
+        console.log(`📨 收到消息: ${message.substring(0, 50)}...`);
+        const msgData = JSON.parse(message);
+        
+        // 处理心跳
+        if (msgData.type === 'ping') {
+          ws.send(JSON.stringify({type: 'pong'}));
+          return;
         }
         
-        userId = msgData.userId;
-        onlineUsers.set(userId, ws);
-        ws.userId = userId;
+        // 处理消息
+        if (['text', 'image', 'audio'].includes(msgData.type)) {
+          const newMessage = new Message({
+            from: msgData.from,
+            to: msgData.to,
+            content: msgData.content,
+            type: msgData.type,
+            timestamp: new Date(msgData.timestamp)
+          });
+          
+          await newMessage.save();
+          
+          // 转换为标准消息格式
+          const formattedMsg = {
+            _id: newMessage._id.toString(),
+            from: newMessage.from.toString(),
+            to: newMessage.to.toString(),
+            content: newMessage.content,
+            type: newMessage.type,
+            timestamp: newMessage.timestamp.toISOString()
+          };
 
-        // 发送连接确认
-        ws.send(JSON.stringify({
-          type: 'system',
-          message: 'CONNECTED'
-        }));
-
-        // 广播在线状态
-        await broadcastFriendStatus(userId, true);
-        return;
+          // 广播消息给发送方和接收方
+          [msgData.to, msgData.from].forEach(targetId => {
+            const client = onlineUsers.get(targetId);
+            if (client && client.readyState === WebSocket.OPEN) {
+              client.send(JSON.stringify(formattedMsg));
+              console.log(`📤 发送消息给 ${targetId}`);
+            }
+          });
+        }
+      } catch (error) {
+        console.error('❌ WebSocket消息处理错误:', error);
       }
-
-      // 处理消息
-      if (msgData.type === 'test' || msgData.type === 'image' || msgData.type === 'audio') {
-        const newMessage = new Message({
-          from: msgData.from,
-          to: msgData.to,
-          content: msgData.content,
-          type: msgData.type,
-          timestamp: new Date(msgData.timestamp)
-        });
-        await newMessage.save();
-        // 转换为标准消息格式
-        const formattedMsg = {
-          _id: newMessage._id.toString(),
-          from: newMessage.from.toString(),
-          to: newMessage.to.toString(),
-          content: newMessage.content,
-          type: newMessage.type,
-          timestamp: newMessage.timestamp.toISOString()
-        };
-
-        // 广播消息
-        [msgData.to, msgData.from].forEach(targetId => {
-          const client = onlineUsers.get(targetId);
-          if (client && client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify(formattedMsg));
-          }
-        });
+    });
+    
+    // 关闭连接处理
+    ws.on('close', async (code, reason) => {
+      console.log(`🚪 连接关闭: ${userId} (代码: ${code}, 原因: ${reason})`);
+      clearInterval(heartbeatInterval);
+      
+      if (userId && onlineUsers.get(userId) === ws) {
+        onlineUsers.delete(userId);
+        await broadcastFriendStatus(userId, false);
       }
-    } catch (error) {
-      console.error('WebSocket消息处理错误:', error);
-    }
-  });
-
-  ws.on('close', async () => {
-    clearInterval(heartbeatInterval);
-    if (userId) {
-      onlineUsers.delete(userId);
-      await broadcastFriendStatus(userId, false);
-    }
+    });
+    
+  }).catch(error => {
+    console.error('❌ 用户验证失败:', error);
+    ws.close(4003, 'User verification failed');
   });
 });
 
