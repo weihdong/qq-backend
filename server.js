@@ -341,37 +341,25 @@ const wss = new WebSocket.Server({ server });
 const onlineUsers = new Map();
 const HEARTBEAT_INTERVAL = 30;
 
-// 改进状态广播函数
+// 修复状态广播函数
 const broadcastFriendStatus = async (userId, isOnline) => {
   try {
-    const friendList = await Friend.findOne({ userId });
-    if (friendList) {
-      const broadcastPromises = friendList.friends.map(async friend => {
-        const friendId = friend.user.toString();
-        
-        // 广播给好友
-        const friendWs = onlineUsers.get(friendId);
-        if (friendWs) {
-          friendWs.send(JSON.stringify({
-            type: 'status',
-            userId,
-            online: isOnline
-          }));
-        }
-        
-        // 广播给自己（更新好友的在线状态）
-        const selfWs = onlineUsers.get(userId);
-        if (selfWs) {
-          selfWs.send(JSON.stringify({
-            type: 'status',
-            userId: friendId,
-            online: onlineUsers.has(friendId) // 实时状态
-          }));
-        }
-      });
+    const friendList = await Friend.findOne({ userId }).populate('friends.user');
+    if (!friendList) return;
+    
+    // 广播给所有好友
+    friendList.friends.forEach(friend => {
+      const friendId = friend.user._id.toString();
+      const friendWs = onlineUsers.get(friendId);
       
-      await Promise.all(broadcastPromises);
-    }
+      if (friendWs) {
+        friendWs.send(JSON.stringify({
+          type: 'status-update',
+          userId: userId.toString(),
+          status: isOnline
+        }));
+      }
+    });
   } catch (error) {
     console.error('状态广播错误:', error);
   }
@@ -437,15 +425,21 @@ wss.on('connection', (ws, req) => {
           timestamp: new Date(msgData.timestamp)
         });
         await newMessage.save();
+        // 转换为标准消息格式
+        const formattedMsg = {
+          _id: newMessage._id.toString(),
+          from: newMessage.from.toString(),
+          to: newMessage.to.toString(),
+          content: newMessage.content,
+          type: newMessage.type,
+          timestamp: newMessage.timestamp.toISOString()
+        };
 
         // 广播消息
         [msgData.to, msgData.from].forEach(targetId => {
           const client = onlineUsers.get(targetId);
           if (client && client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify({
-              ...newMessage.toJSON(),
-              type: msgData.type
-            }));
+            client.send(JSON.stringify(formattedMsg));
           }
         });
       }
