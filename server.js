@@ -122,6 +122,11 @@ const messageSchema = new mongoose.Schema({
     required: true,
     maxlength: 1000
   },
+  type: {
+    type: String,
+    enum: ['text', 'image', 'audio'],
+    default: 'text'
+  },
   timestamp: {
     type: Date,
     default: Date.now
@@ -405,11 +410,12 @@ wss.on('connection', (ws, req) => {
       }
 
       // 处理消息
-      if (msgData.type === 'message') {
+      if (['test', 'image', 'audio'].includes(msgData.type)) {
         const newMessage = new Message({
           from: msgData.from,
           to: msgData.to,
-          content: msgData.content
+          content: msgData.content,
+          type: msgData.type
         });
         await newMessage.save();
 
@@ -418,8 +424,8 @@ wss.on('connection', (ws, req) => {
           const client = onlineUsers.get(targetId);
           if (client && client.readyState === WebSocket.OPEN) {
             client.send(JSON.stringify({
-              type: 'message',
-              ...newMessage.toJSON()
+              ...newMessage.toJSON(),
+              type: 'message'
             }));
           }
         });
