@@ -341,21 +341,23 @@ const wss = new WebSocket.Server({ server });
 const onlineUsers = new Map();
 const HEARTBEAT_INTERVAL = 30;
 
-// 修复状态广播函数
+// 修正广播函数
 const broadcastFriendStatus = async (userId, isOnline) => {
   try {
     const friendList = await Friend.findOne({ userId }).populate('friends.user');
     if (!friendList) return;
     
-    // 广播给所有好友
+    // 确保使用正确的 ID 格式
+    const userIdStr = userId.toString();
+    
     friendList.friends.forEach(friend => {
       const friendId = friend.user._id.toString();
       const friendWs = onlineUsers.get(friendId);
       
-      if (friendWs) {
+      if (friendWs && friendWs.readyState === WebSocket.OPEN) {
         friendWs.send(JSON.stringify({
           type: 'status-update',
-          userId: userId.toString(),
+          userId: userIdStr,
           status: isOnline
         }));
       }
@@ -368,6 +370,7 @@ const broadcastFriendStatus = async (userId, isOnline) => {
 wss.on('connection', (ws, req) => {
   let userId = null;
   let isAlive = true;
+  let heartbeatInterval;
 
   // 心跳检测
   const heartbeat = () => {
@@ -449,7 +452,7 @@ wss.on('connection', (ws, req) => {
   });
 
   ws.on('close', async () => {
-    clearInterval(interval);
+    clearInterval(heartbeatInterval);
     if (userId) {
       onlineUsers.delete(userId);
       await broadcastFriendStatus(userId, false);
