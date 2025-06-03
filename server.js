@@ -422,11 +422,17 @@ wss.on('connection', (ws, req) => {
         
         await newMessage.save();
 
-        // 修复: 使用正确的消息格式广播
+        // 在处理消息时，确保广播消息包含所有必要字段
         const broadcastMsg = {
           type: 'message',
-          ...newMessage.toJSON()
+          _id: newMessage._id,
+          from: newMessage.from,
+          to: newMessage.to,
+          content: newMessage.content,
+          type: newMessage.type,
+          timestamp: newMessage.timestamp
         };
+
 
         // 广播给发送方和接收方
         [msgData.to, msgData.from].forEach(targetId => {
@@ -473,13 +479,13 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     const fileType = file.mimetype.split('/')[0];
     const fileTypeStr = fileType === 'image' ? 'image' : (fileType === 'audio' ? 'audio' : 'file');
 
-    // 将文件保存到GridFS（MongoDB的文件存储系统）
     const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
       bucketName: 'uploads'
     });
 
     const uploadStream = bucket.openUploadStream(`${Date.now()}-${file.originalname}`);
-    uploadStream.end(file.buffer);
+    uploadStream.write(file.buffer);
+    uploadStream.end();
 
     uploadStream.on('finish', () => {
       res.status(HTTP_STATUS.CREATED).json({
@@ -494,6 +500,7 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "上传失败" });
   }
 });
+
 
 // 1. 修复文件服务路由 - 确保正确处理文件请求
 app.get('/api/file/:id', async (req, res) => {
