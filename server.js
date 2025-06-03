@@ -80,11 +80,7 @@ app.options('*', cors());
 app.use(express.json({ limit: '10kb' }));
 
 app.use((req, res, next) => {
-  console.log(`[
-$${new Date().toISOString()}] $$
-{req.method}
-$${req.url} | Origin: $$
-{req.headers.origin}`);
+  console.log(`[${new Date().toISOString()}] ${req.method}${req.url} | Origin: ${req.headers.origin}`);
   next();
 });
 
@@ -240,9 +236,7 @@ app.post('/api/login', async (req, res) => {
     });
 
     await Friend.create({ userId: newUser._id, friends: [] });
-    console.log(`[新用户注册]
-$${username} ID:$$
-{newUser._id}`);
+    console.log(`[新用户注册]${username} ID:${newUser._id}`);
 
     res.status(HTTP_STATUS.CREATED).json({
       userId: newUser._id,
@@ -461,6 +455,7 @@ wss.on('connection', (ws, req) => {
   ws.on('message', async (message) => {
     try {
       const msgData = JSON.parse(message);
+      console.log('接受到的消息：',msgData);
       
       // 处理 connect 类型消息
       if (msgData.type === 'connect') {
@@ -509,6 +504,8 @@ wss.on('connection', (ws, req) => {
             }));
           }
         });
+      }else {
+        console.log('未知消息类型：',msgData.type);
       }
     } catch (error) {
       console.error('WebSocket消息处理错误:', error);
