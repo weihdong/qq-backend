@@ -14,6 +14,58 @@ const WebSocket = require('ws');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
 
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
+// 创建上传目录
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+// 配置multer
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({ 
+  storage: storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024 // 10MB限制
+  }
+});
+
+// 文件上传路由
+app.post('/api/upload', upload.single('file'), (req, res) => {
+  if (!req.file) {
+    return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "未上传文件" });
+  }
+  
+  // 获取文件URL（根据环境配置）
+  const fileUrl = req.file.path.replace(/\\/g, '/');
+  let publicUrl;
+  
+  if (process.env.NODE_ENV === 'production') {
+    publicUrl = `https://${req.get('host')}/uploads/${req.file.filename}`;
+  } else {
+    publicUrl = `http://${req.get('host')}/uploads/${req.file.filename}`;
+  }
+  
+  res.json({ 
+    url: publicUrl,
+    filename: req.file.filename,
+    mimetype: req.file.mimetype
+  });
+});
+
+// 静态文件服务
+app.use('/uploads', express.static(uploadDir));
 const HTTP_STATUS = {
   BAD_REQUEST: 400,
   UNAUTHORIZED: 401,
@@ -83,106 +135,6 @@ const userSchema = new mongoose.Schema({
 
 const User = mongoose.model('User', userSchema);
 
-const messageSchema = new mongoose.Schema({
-  from: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  to: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  content: {
-    type: String,
-    required: true,
-    maxlength: 1000
-  },
-  type: {
-    type: String,
-    enum: ['text', 'image', 'voice', 'emoji'],
-    default: 'text'
-  },
-  attachments: {
-    type: [mongoose.Schema.Types.ObjectId],
-    ref: 'Attachment'
-  },
-  timestamp: {
-    type: Date,
-    default: Date.now
-  }
-});
-
-// 新增附件模型
-const attachmentSchema = new mongoose.Schema({
-  type: {
-    type: String,
-    enum: ['image', 'voice'],
-    required: true
-  },
-  data: {
-    type: Buffer,
-    required: true
-  },
-  contentType: {
-    type: String,
-    required: true
-  },
-  size: {
-    type: Number,
-    required: true
-  },
-  uploadedAt: {
-    type: Date,
-    default: Date.now
-  }
-});
-
-const Message = mongoose.model('Message', messageSchema);
-const Attachment = mongoose.model('Attachment', attachmentSchema);
-
-
-
-const multer = require('multer');
-const path = require('path');
-
-// 配置 multer 存储
-const storage = multer.memoryStorage();
-const upload = multer({ 
-  storage: storage,
-  fileFilter: (req, file, cb) => {
-    const allowedTypes = ['image/png', 'image/jpeg', 'image/gif', 'audio/wav', 'audio/mp3'];
-    if (allowedTypes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error('文件类型不支持'), false);
-    }
-  }
-});
-
-// 上传文件接口
-app.post('/api/upload', upload.single('file'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: '没有上传文件' });
-    }
-
-    const attachment = new Attachment({
-      type: req.file.mimetype.startsWith('image') ? 'image' : 'voice',
-      data: req.file.buffer,
-      contentType: req.file.mimetype,
-      size: req.file.size
-    });
-
-    await attachment.save();
-    res.json({ attachmentId: attachment._id });
-  } catch (error) {
-    console.error('上传文件错误:', error);
-    res.status(500).json({ error: '上传失败' });
-  }
-});
-
 // 好友模型
 const friendSchema = new mongoose.Schema({
   userId: { 
@@ -205,7 +157,30 @@ const friendSchema = new mongoose.Schema({
 
 const Friend = mongoose.model('Friend', friendSchema);
 
+// 消息模型
+const messageSchema = new mongoose.Schema({
+  from: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  to: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  content: {
+    type: String,
+    required: true,
+    maxlength: 1000
+  },
+  timestamp: {
+    type: Date,
+    default: Date.now
+  }
+});
 
+const Message = mongoose.model('Message', messageSchema);
 
 // 登录路由
 app.post('/api/login', async (req, res) => {
@@ -290,19 +265,6 @@ app.get('/api/friends', async (req, res) => {
   } catch (error) {
     console.error('获取好友列表错误:', error);
     res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "获取失败" });
-  }
-});
-app.get('/api/attachment/:id', async (req, res) => {
-  try {
-    const attachment = await Attachment.findById(req.params.id);
-    if (!attachment) {
-      return res.status(404).json({ error: '附件不存在' });
-    }
-    res.set('Content-Type', attachment.contentType);
-    res.send(attachment.data);
-  } catch (error) {
-    console.error('下载附件错误:', error);
-    res.status(500).json({ error: '下载失败' });
   }
 });
 
@@ -471,50 +433,59 @@ wss.on('connection', (ws, req) => {
   ws.on('message', async (message) => {
     try {
       const msgData = JSON.parse(message);
-      console.log('收到消息:', msgData);
       
-      // 处理连接请求
+      // 合并处理 connect 类型消息
       if (msgData.type === 'connect') {
+        // 清理旧连接
+        if (userId && onlineUsers.get(userId) === ws) {
+          onlineUsers.delete(userId);
+        }
+        
         userId = msgData.userId;
         onlineUsers.set(userId, ws);
         ws.userId = userId;
-        
+
+        // 发送连接确认
+        ws.send(JSON.stringify({
+          type: 'system',
+          message: 'CONNECTED'
+        }));
+
         // 广播在线状态
         await broadcastFriendStatus(userId, true);
         return;
       }
+
+      // 处理消息（修改为支持多种类型）
+      if (msgData.type === 'message' || 
+        msgData.type === 'emoji' || 
+        msgData.type === 'image' || 
+        msgData.type === 'audio') {
       
-      // 处理消息
-      if (msgData.type === 'message') {
-        // 保存消息到数据库
-        const newMessage = new Message({
-          from: msgData.from,
-          to: msgData.to,
-          content: msgData.content,
-          type: msgData.type,
-          attachments: msgData.attachments || [] // 确保附件数组存在
-        });
-        
-        await newMessage.save();
-        console.log('消息保存成功:', newMessage);
+      const newMessage = new Message({
+        from: msgData.from,
+        to: msgData.to,
+        content: msgData.content,
+        type: msgData.type // 保存消息类型
+      });
+      
+      await newMessage.save();
 
-        // 广播消息给发送方和接收方
-        const targets = [msgData.to, msgData.from];
-        for (const targetId of targets) {
-          const client = onlineUsers.get(targetId);
-          if (client && client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify({
-              type: 'message',
-              ...newMessage.toObject() // 使用 toObject() 而不是 toJSON()
-            }));
-          }
+      // 广播消息
+      [msgData.to, msgData.from].forEach(targetId => {
+        const client = onlineUsers.get(targetId);
+        if (client && client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify({
+            type: msgData.type, // 保持类型不变
+            ...newMessage.toJSON()
+          }));
         }
-      }
-    } catch (error) {
-      console.error('WebSocket消息处理错误:', error);
+      });
     }
-  });
-
+  } catch (error) {
+    console.error('WebSocket消息处理错误:', error);
+  }
+});
 
   ws.on('close', async () => {
     clearInterval(interval);
