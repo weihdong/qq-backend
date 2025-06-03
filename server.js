@@ -83,6 +83,35 @@ const userSchema = new mongoose.Schema({
 
 const User = mongoose.model('User', userSchema);
 
+
+const messageSchema = new mongoose.Schema({
+  from: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  to: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  content: {
+    type: String,
+    required: true,
+    maxlength: 2000
+  },
+  type: {
+    type: String,
+    enum: ['text', 'image', 'audio'],
+    default: 'text'
+  },
+  timestamp: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+const Message = mongoose.model('Message', messageSchema);
 // 好友模型
 const friendSchema = new mongoose.Schema({
   userId: { 
@@ -107,7 +136,6 @@ const Friend = mongoose.model('Friend', friendSchema);
 
 
 
-const Message = mongoose.model('Message', messageSchema);
 
 // 登录路由
 app.post('/api/login', async (req, res) => {
@@ -429,32 +457,7 @@ const upload = multer({
 });
 
 // 消息模型修改 - 支持不同类型消息
-const messageSchema = new mongoose.Schema({
-  from: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  to: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  content: {
-    type: String,
-    required: true,
-    maxlength: 2000
-  },
-  type: {
-    type: String,
-    enum: ['text', 'image', 'audio'],
-    default: 'text'
-  },
-  timestamp: {
-    type: Date,
-    default: Date.now
-  }
-});
+
 
 // 新增文件上传路由
 app.post('/api/upload', upload.single('file'), async (req, res) => {
