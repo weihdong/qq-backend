@@ -471,54 +471,50 @@ wss.on('connection', (ws, req) => {
   ws.on('message', async (message) => {
     try {
       const msgData = JSON.parse(message);
+      console.log('收到消息:', msgData);
       
-      // 合并处理 connect 类型消息
+      // 处理连接请求
       if (msgData.type === 'connect') {
-        // 清理旧连接
-        if (userId && onlineUsers.get(userId) === ws) {
-          onlineUsers.delete(userId);
-        }
-        
         userId = msgData.userId;
         onlineUsers.set(userId, ws);
         ws.userId = userId;
-
-        // 发送连接确认
-        ws.send(JSON.stringify({
-          type: 'system',
-          message: 'CONNECTED'
-        }));
-
+        
         // 广播在线状态
         await broadcastFriendStatus(userId, true);
         return;
       }
-
+      
+      // 处理消息
       if (msgData.type === 'message') {
+        // 保存消息到数据库
         const newMessage = new Message({
           from: msgData.from,
           to: msgData.to,
           content: msgData.content,
           type: msgData.type,
-          attachments: msgData.attachments
+          attachments: msgData.attachments || [] // 确保附件数组存在
         });
+        
         await newMessage.save();
-  
-        // 广播消息
-        [msgData.to, msgData.from].forEach(targetId => {
+        console.log('消息保存成功:', newMessage);
+
+        // 广播消息给发送方和接收方
+        const targets = [msgData.to, msgData.from];
+        for (const targetId of targets) {
           const client = onlineUsers.get(targetId);
           if (client && client.readyState === WebSocket.OPEN) {
             client.send(JSON.stringify({
               type: 'message',
-              ...newMessage.toJSON()
+              ...newMessage.toObject() // 使用 toObject() 而不是 toJSON()
             }));
           }
-        });
+        }
       }
     } catch (error) {
       console.error('WebSocket消息处理错误:', error);
     }
   });
+
 
   ws.on('close', async () => {
     clearInterval(interval);
