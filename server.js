@@ -411,8 +411,8 @@ wss.on('connection', (ws, req) => {
         return;
       }
 
-      // 处理所有类型的消息
-      if (['text', 'image', 'audio'].includes(msgData.type)) {
+      // 修复: 处理所有类型的消息
+      if (msgData.type && ['text', 'image', 'audio'].includes(msgData.type)) {
         const newMessage = new Message({
           from: msgData.from,
           to: msgData.to,
@@ -422,14 +422,17 @@ wss.on('connection', (ws, req) => {
         
         await newMessage.save();
 
-        // 广播消息
+        // 修复: 使用正确的消息格式广播
+        const broadcastMsg = {
+          type: 'message',
+          ...newMessage.toJSON()
+        };
+
+        // 广播给发送方和接收方
         [msgData.to, msgData.from].forEach(targetId => {
           const client = onlineUsers.get(targetId);
           if (client && client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify({
-              type: 'message',
-              ...newMessage.toJSON()
-            }));
+            client.send(JSON.stringify(broadcastMsg));
           }
         });
       }
@@ -492,21 +495,43 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
   }
 });
 
-// 新增文件获取路由
+// 1. 修复文件服务路由 - 确保正确处理文件请求
 app.get('/api/file/:id', async (req, res) => {
   try {
     const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
       bucketName: 'uploads'
     });
 
-    const fileId = new mongoose.Types.ObjectId(req.params.id);
+    // 确保正确处理 ObjectId
+    let fileId;
+    try {
+      fileId = new mongoose.Types.ObjectId(req.params.id);
+    } catch (e) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "无效的文件ID格式" });
+    }
+
     const downloadStream = bucket.openDownloadStream(fileId);
 
     downloadStream.on('error', (error) => {
       if (error.code === 'ENOENT') {
         return res.status(HTTP_STATUS.NOT_FOUND).json({ error: "文件不存在" });
       }
-      throw error;
+      console.error('文件下载错误:', error);
+      res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "获取文件失败" });
+    });
+
+    // 设置正确的 Content-Type
+    downloadStream.on('file', (file) => {
+      if (file.contentType) {
+        res.set('Content-Type', file.contentType);
+      } else if (file.filename) {
+        const ext = file.filename.split('.').pop();
+        if (ext === 'png' || ext === 'jpg' || ext === 'jpeg') {
+          res.set('Content-Type', `image/${ext === 'png' ? 'png' : 'jpeg'}`);
+        } else if (ext === 'webm') {
+          res.set('Content-Type', 'audio/webm');
+        }
+      }
     });
 
     downloadStream.pipe(res);
