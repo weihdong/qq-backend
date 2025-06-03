@@ -105,128 +105,7 @@ const friendSchema = new mongoose.Schema({
 
 const Friend = mongoose.model('Friend', friendSchema);
 
-// 添加必要的依赖
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-const SpeechToTextV1 = require('ibm-watson/speech-to-text/v1');
-const { IamAuthenticator } = require('ibm-watson/auth');
 
-// 在HTTP_STATUS常量后添加文件上传配置
-const UPLOAD_DIR = path.join(__dirname, 'uploads');
-if (!fs.existsSync(UPLOAD_DIR)) {
-  fs.mkdirSync(UPLOAD_DIR);
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, UPLOAD_DIR);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
-const upload = multer({ 
-  storage,
-  limits: {
-    fileSize: 10 * 1024 * 1024 // 10MB限制
-  },
-  fileFilter: (req, file, cb) => {
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'audio/mpeg', 'audio/wav'];
-    if (allowedTypes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error('文件类型不支持'), false);
-    }
-  }
-});
-
-// 初始化IBM Watson语音识别服务
-const speechToText = new SpeechToTextV1({
-  authenticator: new IamAuthenticator({
-    apikey: process.env.IBM_SPEECH_TO_TEXT_APIKEY || 'your-api-key',
-  }),
-  serviceUrl: process.env.IBM_SPEECH_TO_TEXT_URL || 'https://api.us-south.speech-to-text.watson.cloud.ibm.com',
-});
-
-// 修改消息模型以支持多媒体消息
-const messageSchema = new mongoose.Schema({
-  from: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  to: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  content: {
-    type: String,
-    required: function() { return this.type === 'text'; },
-    maxlength: 1000
-  },
-  timestamp: {
-    type: Date,
-    default: Date.now
-  },
-  // 新增字段
-  type: {
-    type: String,
-    enum: ['text', 'image', 'audio'],
-    default: 'text'
-  },
-  fileUrl: String, // 存储文件路径
-  duration: Number // 音频时长(秒)
-}, { versionKey: false });
-
-// 添加文件上传路由
-app.post('/api/upload', upload.single('file'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "未上传文件" });
-    }
-
-    // 构建可访问的文件URL
-    const fileUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
-    
-    // 如果是音频文件，进行语音识别
-    let transcript = '';
-    if (req.file.mimetype.startsWith('audio/')) {
-      try {
-        const recognizeParams = {
-          audio: fs.createReadStream(req.file.path),
-          contentType: req.file.mimetype,
-          model: 'zh-CN_BroadbandModel', // 中文模型
-        };
-        
-        const { result } = await speechToText.recognize(recognizeParams);
-        transcript = result.results
-          .map(result => result.alternatives[0].transcript)
-          .join('\n');
-      } catch (sttError) {
-        console.error('语音识别失败:', sttError);
-        transcript = '[语音消息]';
-      }
-    }
-
-    res.status(HTTP_STATUS.CREATED).json({
-      fileUrl,
-      filename: req.file.filename,
-      type: req.file.mimetype.startsWith('image/') ? 'image' : 'audio',
-      transcript,
-      duration: req.body.duration ? parseFloat(req.body.duration) : 0
-    });
-  } catch (error) {
-    console.error('文件上传错误:', error);
-    res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "文件上传失败" });
-  }
-});
-
-// 添加静态文件服务
-app.use('/uploads', express.static(UPLOAD_DIR));
 
 const Message = mongoose.model('Message', messageSchema);
 
@@ -504,17 +383,15 @@ wss.on('connection', (ws, req) => {
         return;
       }
 
-      // 处理普通文本消息和多媒体消息
-      if (msgData.type === 'message' || msgData.type === 'image' || msgData.type === 'audio') {
+      // 处理所有类型的消息
+      if (['text', 'image', 'audio'].includes(msgData.type)) {
         const newMessage = new Message({
           from: msgData.from,
           to: msgData.to,
-          content: msgData.content || '', // 对于多媒体消息，content可以是描述或转录文本
-          type: msgData.type,
-          fileUrl: msgData.fileUrl,
-          duration: msgData.duration
+          content: msgData.content,
+          type: msgData.type
         });
-
+        
         await newMessage.save();
 
         // 广播消息
@@ -522,7 +399,7 @@ wss.on('connection', (ws, req) => {
           const client = onlineUsers.get(targetId);
           if (client && client.readyState === WebSocket.OPEN) {
             client.send(JSON.stringify({
-              type: msgData.type,
+              type: 'message',
               ...newMessage.toJSON()
             }));
           }
@@ -543,21 +420,102 @@ wss.on('connection', (ws, req) => {
 });
 
 // 其他中间件和路由...
+// 新增文件上传功能
+const multer = require('multer');
+const storage = multer.memoryStorage();
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 10 * 1024 * 1024 } // 10MB限制
+});
 
-// 在优雅关闭中添加文件清理
+// 消息模型修改 - 支持不同类型消息
+const messageSchema = new mongoose.Schema({
+  from: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  to: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  content: {
+    type: String,
+    required: true,
+    maxlength: 2000
+  },
+  type: {
+    type: String,
+    enum: ['text', 'image', 'audio'],
+    default: 'text'
+  },
+  timestamp: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+// 新增文件上传路由
+app.post('/api/upload', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "未上传文件" });
+    }
+
+    const file = req.file;
+    const fileType = file.mimetype.split('/')[0];
+    const fileTypeStr = fileType === 'image' ? 'image' : (fileType === 'audio' ? 'audio' : 'file');
+
+    // 将文件保存到GridFS（MongoDB的文件存储系统）
+    const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
+      bucketName: 'uploads'
+    });
+
+    const uploadStream = bucket.openUploadStream(`${Date.now()}-${file.originalname}`);
+    uploadStream.end(file.buffer);
+
+    uploadStream.on('finish', () => {
+      res.status(HTTP_STATUS.CREATED).json({
+        url: `/api/file/${uploadStream.id}`,
+        type: fileTypeStr,
+        originalName: file.originalname,
+        size: file.size
+      });
+    });
+  } catch (error) {
+    console.error('文件上传错误:', error);
+    res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "上传失败" });
+  }
+});
+
+// 新增文件获取路由
+app.get('/api/file/:id', async (req, res) => {
+  try {
+    const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
+      bucketName: 'uploads'
+    });
+
+    const fileId = new mongoose.Types.ObjectId(req.params.id);
+    const downloadStream = bucket.openDownloadStream(fileId);
+
+    downloadStream.on('error', (error) => {
+      if (error.code === 'ENOENT') {
+        return res.status(HTTP_STATUS.NOT_FOUND).json({ error: "文件不存在" });
+      }
+      throw error;
+    });
+
+    downloadStream.pipe(res);
+  } catch (error) {
+    console.error('文件获取错误:', error);
+    res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "获取文件失败" });
+  }
+});
+// 优雅关闭
 const gracefulShutdown = () => {
   console.log('🛑 收到终止信号，开始清理...');
   server.close(async () => {
-    // 删除上传的文件
-    fs.readdir(UPLOAD_DIR, (err, files) => {
-      if (err) return;
-      files.forEach(file => {
-        fs.unlink(path.join(UPLOAD_DIR, file), err => {
-          if (err) console.error(`删除文件失败: ${file}`, err);
-        });
-      });
-    });
-    
     await mongoose.disconnect();
     console.log('✅ 资源清理完成');
     process.exit(0);
