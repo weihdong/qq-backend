@@ -83,7 +83,6 @@ const userSchema = new mongoose.Schema({
 
 const User = mongoose.model('User', userSchema);
 
-
 const messageSchema = new mongoose.Schema({
   from: {
     type: mongoose.Schema.Types.ObjectId,
@@ -98,12 +97,16 @@ const messageSchema = new mongoose.Schema({
   content: {
     type: String,
     required: true,
-    maxlength: 2000
+    maxlength: 1000
   },
   type: {
     type: String,
-    enum: ['text', 'image', 'audio'],
+    enum: ['text', 'image', 'voice', 'emoji'],
     default: 'text'
+  },
+  attachments: {
+    type: [mongoose.Schema.Types.ObjectId],
+    ref: 'Attachment'
   },
   timestamp: {
     type: Date,
@@ -111,7 +114,75 @@ const messageSchema = new mongoose.Schema({
   }
 });
 
+// 新增附件模型
+const attachmentSchema = new mongoose.Schema({
+  type: {
+    type: String,
+    enum: ['image', 'voice'],
+    required: true
+  },
+  data: {
+    type: Buffer,
+    required: true
+  },
+  contentType: {
+    type: String,
+    required: true
+  },
+  size: {
+    type: Number,
+    required: true
+  },
+  uploadedAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
 const Message = mongoose.model('Message', messageSchema);
+const Attachment = mongoose.model('Attachment', attachmentSchema);
+
+
+
+const multer = require('multer');
+const path = require('path');
+
+// 配置 multer 存储
+const storage = multer.memoryStorage();
+const upload = multer({ 
+  storage: storage,
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/gif', 'audio/wav', 'audio/mp3'];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('文件类型不支持'), false);
+    }
+  }
+});
+
+// 上传文件接口
+app.post('/api/upload', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: '没有上传文件' });
+    }
+
+    const attachment = new Attachment({
+      type: req.file.mimetype.startsWith('image') ? 'image' : 'voice',
+      data: req.file.buffer,
+      contentType: req.file.mimetype,
+      size: req.file.size
+    });
+
+    await attachment.save();
+    res.json({ attachmentId: attachment._id });
+  } catch (error) {
+    console.error('上传文件错误:', error);
+    res.status(500).json({ error: '上传失败' });
+  }
+});
+
 // 好友模型
 const friendSchema = new mongoose.Schema({
   userId: { 
@@ -133,7 +204,6 @@ const friendSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 const Friend = mongoose.model('Friend', friendSchema);
-
 
 
 
@@ -220,6 +290,19 @@ app.get('/api/friends', async (req, res) => {
   } catch (error) {
     console.error('获取好友列表错误:', error);
     res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "获取失败" });
+  }
+});
+app.get('/api/attachment/:id', async (req, res) => {
+  try {
+    const attachment = await Attachment.findById(req.params.id);
+    if (!attachment) {
+      return res.status(404).json({ error: '附件不存在' });
+    }
+    res.set('Content-Type', attachment.contentType);
+    res.send(attachment.data);
+  } catch (error) {
+    console.error('下载附件错误:', error);
+    res.status(500).json({ error: '下载失败' });
   }
 });
 
@@ -411,34 +494,24 @@ wss.on('connection', (ws, req) => {
         return;
       }
 
-      // 修复: 处理所有类型的消息
-      if (msgData.type && ['text', 'image', 'audio'].includes(msgData.type)) {
+      if (msgData.type === 'message') {
         const newMessage = new Message({
           from: msgData.from,
           to: msgData.to,
           content: msgData.content,
-          type: msgData.type
+          type: msgData.type,
+          attachments: msgData.attachments
         });
-        
         await newMessage.save();
-
-        // 在处理消息时，确保广播消息包含所有必要字段
-        const broadcastMsg = {
-          type: 'message',
-          _id: newMessage._id,
-          from: newMessage.from,
-          to: newMessage.to,
-          content: newMessage.content,
-          type: newMessage.type,
-          timestamp: newMessage.timestamp
-        };
-
-
-        // 广播给发送方和接收方
+  
+        // 广播消息
         [msgData.to, msgData.from].forEach(targetId => {
           const client = onlineUsers.get(targetId);
           if (client && client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify(broadcastMsg));
+            client.send(JSON.stringify({
+              type: 'message',
+              ...newMessage.toJSON()
+            }));
           }
         });
       }
@@ -457,96 +530,7 @@ wss.on('connection', (ws, req) => {
 });
 
 // 其他中间件和路由...
-// 新增文件上传功能
-const multer = require('multer');
-const storage = multer.memoryStorage();
-const upload = multer({ 
-  storage: storage,
-  limits: { fileSize: 10 * 1024 * 1024 } // 10MB限制
-});
 
-// 消息模型修改 - 支持不同类型消息
-
-
-// 新增文件上传路由
-app.post('/api/upload', upload.single('file'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "未上传文件" });
-    }
-
-    const file = req.file;
-    const fileType = file.mimetype.split('/')[0];
-    const fileTypeStr = fileType === 'image' ? 'image' : (fileType === 'audio' ? 'audio' : 'file');
-
-    const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
-      bucketName: 'uploads'
-    });
-
-    const uploadStream = bucket.openUploadStream(`${Date.now()}-${file.originalname}`);
-    uploadStream.write(file.buffer);
-    uploadStream.end();
-
-    uploadStream.on('finish', () => {
-      res.status(HTTP_STATUS.CREATED).json({
-        url: `/api/file/${uploadStream.id}`,
-        type: fileTypeStr,
-        originalName: file.originalname,
-        size: file.size
-      });
-    });
-  } catch (error) {
-    console.error('文件上传错误:', error);
-    res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "上传失败" });
-  }
-});
-
-
-// 1. 修复文件服务路由 - 确保正确处理文件请求
-app.get('/api/file/:id', async (req, res) => {
-  try {
-    const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
-      bucketName: 'uploads'
-    });
-
-    // 确保正确处理 ObjectId
-    let fileId;
-    try {
-      fileId = new mongoose.Types.ObjectId(req.params.id);
-    } catch (e) {
-      return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "无效的文件ID格式" });
-    }
-
-    const downloadStream = bucket.openDownloadStream(fileId);
-
-    downloadStream.on('error', (error) => {
-      if (error.code === 'ENOENT') {
-        return res.status(HTTP_STATUS.NOT_FOUND).json({ error: "文件不存在" });
-      }
-      console.error('文件下载错误:', error);
-      res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "获取文件失败" });
-    });
-
-    // 设置正确的 Content-Type
-    downloadStream.on('file', (file) => {
-      if (file.contentType) {
-        res.set('Content-Type', file.contentType);
-      } else if (file.filename) {
-        const ext = file.filename.split('.').pop();
-        if (ext === 'png' || ext === 'jpg' || ext === 'jpeg') {
-          res.set('Content-Type', `image/${ext === 'png' ? 'png' : 'jpeg'}`);
-        } else if (ext === 'webm') {
-          res.set('Content-Type', 'audio/webm');
-        }
-      }
-    });
-
-    downloadStream.pipe(res);
-  } catch (error) {
-    console.error('文件获取错误:', error);
-    res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "获取文件失败" });
-  }
-});
 // 优雅关闭
 const gracefulShutdown = () => {
   console.log('🛑 收到终止信号，开始清理...');
