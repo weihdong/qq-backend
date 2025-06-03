@@ -174,33 +174,34 @@ const messageSchema = new mongoose.Schema({
 
 const Message = mongoose.model('Message', messageSchema);
 
-// 文件上传路由
-app.post('/api/upload', upload.single('file'), async (req, res) => {
+app.post('/api/upload', upload.single('file'), (req, res) => {
   try {
     if (!req.file) {
-      return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "未上传文件" });
+      return res.status(400).json({ error: "No file uploaded" });
     }
-
-    // 获取文件URL
-    const fileUrl = req.file.path.replace(/\\/g, '/');
-    let publicUrl;
-
+    
+    // 获取文件URL（根据环境配置）
+    const filePath = req.file.path;
+    const fileName = req.file.filename;
+    
+    let fileUrl;
     if (process.env.NODE_ENV === 'production') {
-      publicUrl = `https://${req.get('host')}/uploads/${req.file.filename}`;
+      fileUrl = `https://${req.get('host')}/uploads/${fileName}`;
     } else {
-      publicUrl = `http://${req.get('host')}/uploads/${req.file.filename}`;
+      fileUrl = `http://${req.get('host')}/uploads/${fileName}`;
     }
-
+    
     res.json({ 
-      url: publicUrl,
-      filename: req.file.filename,
+      url: fileUrl,
+      filename: fileName,
       mimetype: req.file.mimetype
     });
   } catch (error) {
-    console.error('上传文件错误:', error);
-    res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: '上传失败' });
+    console.error('文件上传错误:', error);
+    res.status(500).json({ error: "File upload failed" });
   }
 });
+
 
 // 静态文件服务
 app.use('/uploads', express.static(uploadDir));
