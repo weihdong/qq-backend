@@ -186,13 +186,9 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     let publicUrl;
 
     if (process.env.NODE_ENV === 'production') {
-      publicUrl = `https://
-$${req.get('host')}/uploads/$$
-{req.file.filename}`;
+      publicUrl = `https://${req.get('host')}/uploads/${req.file.filename}`;
     } else {
-      publicUrl = `http://
-$${req.get('host')}/uploads/$$
-{req.file.filename}`;
+      publicUrl = `http://${req.get('host')}/uploads/${req.file.filename}`;
     }
 
     res.json({ 
