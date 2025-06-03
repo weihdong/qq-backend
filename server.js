@@ -13,17 +13,17 @@ const mongoose = require('mongoose');
 const WebSocket = require('ws');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
-
+const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const multer = require('multer');
+
 // 创建上传目录
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-// 配置multer
+// 配置 multer 存储
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, uploadDir);
@@ -38,34 +38,17 @@ const upload = multer({
   storage: storage,
   limits: {
     fileSize: 10 * 1024 * 1024 // 10MB限制
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/gif', 'audio/wav', 'audio/mp3'];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('文件类型不支持'), false);
+    }
   }
 });
 
-// 文件上传路由
-app.post('/api/upload', upload.single('file'), (req, res) => {
-  if (!req.file) {
-    return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "未上传文件" });
-  }
-  
-  // 获取文件URL（根据环境配置）
-  const fileUrl = req.file.path.replace(/\\/g, '/');
-  let publicUrl;
-  
-  if (process.env.NODE_ENV === 'production') {
-    publicUrl = `https://${req.get('host')}/uploads/${req.file.filename}`;
-  } else {
-    publicUrl = `http://${req.get('host')}/uploads/${req.file.filename}`;
-  }
-  
-  res.json({ 
-    url: publicUrl,
-    filename: req.file.filename,
-    mimetype: req.file.mimetype
-  });
-});
-
-// 静态文件服务
-app.use('/uploads', express.static(uploadDir));
 const HTTP_STATUS = {
   BAD_REQUEST: 400,
   UNAUTHORIZED: 401,
@@ -97,7 +80,11 @@ app.options('*', cors());
 app.use(express.json({ limit: '10kb' }));
 
 app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} | Origin: ${req.headers.origin}`);
+  console.log(`[
+$${new Date().toISOString()}] $$
+{req.method}
+$${req.url} | Origin: $$
+{req.headers.origin}`);
   next();
 });
 
@@ -174,6 +161,11 @@ const messageSchema = new mongoose.Schema({
     required: true,
     maxlength: 1000
   },
+  type: {
+    type: String,
+    enum: ['text', 'image', 'voice', 'emoji'],
+    default: 'text'
+  },
   timestamp: {
     type: Date,
     default: Date.now
@@ -181,6 +173,41 @@ const messageSchema = new mongoose.Schema({
 });
 
 const Message = mongoose.model('Message', messageSchema);
+
+// 文件上传路由
+app.post('/api/upload', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "未上传文件" });
+    }
+
+    // 获取文件URL
+    const fileUrl = req.file.path.replace(/\\/g, '/');
+    let publicUrl;
+
+    if (process.env.NODE_ENV === 'production') {
+      publicUrl = `https://
+$${req.get('host')}/uploads/$$
+{req.file.filename}`;
+    } else {
+      publicUrl = `http://
+$${req.get('host')}/uploads/$$
+{req.file.filename}`;
+    }
+
+    res.json({ 
+      url: publicUrl,
+      filename: req.file.filename,
+      mimetype: req.file.mimetype
+    });
+  } catch (error) {
+    console.error('上传文件错误:', error);
+    res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: '上传失败' });
+  }
+});
+
+// 静态文件服务
+app.use('/uploads', express.static(uploadDir));
 
 // 登录路由
 app.post('/api/login', async (req, res) => {
@@ -216,7 +243,9 @@ app.post('/api/login', async (req, res) => {
     });
 
     await Friend.create({ userId: newUser._id, friends: [] });
-    console.log(`[新用户注册] ${username} ID:${newUser._id}`);
+    console.log(`[新用户注册]
+$${username} ID:$$
+{newUser._id}`);
 
     res.status(HTTP_STATUS.CREATED).json({
       userId: newUser._id,
@@ -243,6 +272,7 @@ app.get('/api/user/:id', async (req, res) => {
     res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "服务器错误" });
   }
 });
+
 // 获取好友列表
 app.get('/api/friends', async (req, res) => {
   try {
@@ -287,7 +317,8 @@ app.get('/api/messages', async (req, res) => {
     res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "获取消息失败" });
   }
 });
-// 添加好友路由（最终修正版）
+
+// 添加好友路由
 app.post('/api/friends', async (req, res) => {
   try {
     const { userId, friendUsername } = req.body;
@@ -327,7 +358,7 @@ app.post('/api/friends', async (req, res) => {
       'friends.user': friendUser._id
     });
     if (existingFriend) {
-      return res.status(HTTP_STATUS.CONFLICT).json({ // 使用已定义的CONFLICT状态码
+      return res.status(HTTP_STATUS.CONFLICT).json({ 
         error: "已是好友关系",
         code: "ALREADY_FRIENDS"
       });
@@ -378,7 +409,7 @@ app.post('/api/friends', async (req, res) => {
     });
   }
 });
-// WebSocket处理
+
 // WebSocket处理
 const server = app.listen(process.env.PORT || 3000, '0.0.0.0', () => {
   console.log(`🚀 服务器运行中，端口：${server.address().port}`);
@@ -434,7 +465,7 @@ wss.on('connection', (ws, req) => {
     try {
       const msgData = JSON.parse(message);
       
-      // 合并处理 connect 类型消息
+      // 处理 connect 类型消息
       if (msgData.type === 'connect') {
         // 清理旧连接
         if (userId && onlineUsers.get(userId) === ws) {
@@ -456,36 +487,36 @@ wss.on('connection', (ws, req) => {
         return;
       }
 
-      // 处理消息（修改为支持多种类型）
+      // 处理消息（支持多种类型）
       if (msgData.type === 'message' || 
-        msgData.type === 'emoji' || 
-        msgData.type === 'image' || 
-        msgData.type === 'audio') {
-      
-      const newMessage = new Message({
-        from: msgData.from,
-        to: msgData.to,
-        content: msgData.content,
-        type: msgData.type // 保存消息类型
-      });
-      
-      await newMessage.save();
+          msgData.type === 'emoji' || 
+          msgData.type === 'image' || 
+          msgData.type === 'audio') {
+        
+        const newMessage = new Message({
+          from: msgData.from,
+          to: msgData.to,
+          content: msgData.content,
+          type: msgData.type // 保存消息类型
+        });
+        
+        await newMessage.save();
 
-      // 广播消息
-      [msgData.to, msgData.from].forEach(targetId => {
-        const client = onlineUsers.get(targetId);
-        if (client && client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify({
-            type: msgData.type, // 保持类型不变
-            ...newMessage.toJSON()
-          }));
-        }
-      });
+        // 广播消息
+        [msgData.to, msgData.from].forEach(targetId => {
+          const client = onlineUsers.get(targetId);
+          if (client && client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({
+              type: msgData.type, // 保持类型不变
+              ...newMessage.toJSON()
+            }));
+          }
+        });
+      }
+    } catch (error) {
+      console.error('WebSocket消息处理错误:', error);
     }
-  } catch (error) {
-    console.error('WebSocket消息处理错误:', error);
-  }
-});
+  });
 
   ws.on('close', async () => {
     clearInterval(interval);
@@ -495,8 +526,6 @@ wss.on('connection', (ws, req) => {
     }
   });
 });
-
-// 其他中间件和路由...
 
 // 优雅关闭
 const gracefulShutdown = () => {
