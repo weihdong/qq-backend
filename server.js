@@ -2,28 +2,31 @@ process.on('warning', (warning) => {
   console.warn('⚠️ Node.js警告:', warning.stack);
 });
 
-console.log('🛠️ 环境变量:', {
-  NODE_ENV: process.env.NODE_ENV,
-  PORT: process.env.PORT,
-  MONGODB_URI: process.env.MONGODB_URI ? '已配置' : '未配置'
-});
-// 确保上传目录存在
-const uploadDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-// 提供静态文件访问
-app.use('/uploads', express.static(uploadDir));
+// 引入必要的模块
 const express = require('express');
 const mongoose = require('mongoose');
 const WebSocket = require('ws');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
-
-// 新增依赖
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+
+console.log('🛠️ 环境变量:', {
+  NODE_ENV: process.env.NODE_ENV,
+  PORT: process.env.PORT,
+  MONGODB_URI: process.env.MONGODB_URI ? '已配置' : '未配置'
+});
+
+// 确保上传目录存在
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+// 提供静态文件访问
+const app = express();
+app.use('/uploads', express.static(uploadDir));
 
 const HTTP_STATUS = {
   BAD_REQUEST: 400,
@@ -34,8 +37,6 @@ const HTTP_STATUS = {
   CREATED: 201,
   OK: 200
 };
-
-const app = express();
 
 const allowedOrigins = [
   'https://qq.085410.xyz',
@@ -56,7 +57,11 @@ app.options('*', cors());
 app.use(express.json({ limit: '10kb' }));
 
 app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} | Origin: ${req.headers.origin}`);
+  console.log(`[
+$${new Date().toISOString()}] $$
+{req.method}
+$${req.url} | Origin: $$
+{req.headers.origin}`);
   next();
 });
 
@@ -116,7 +121,6 @@ const friendSchema = new mongoose.Schema({
 
 const Friend = mongoose.model('Friend', friendSchema);
 
-
 // 配置文件上传
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -132,8 +136,6 @@ const upload = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 } // 10MB限制
 });
-
-
 
 // 修改消息模型
 const messageSchema = new mongoose.Schema({
@@ -161,7 +163,6 @@ const messageSchema = new mongoose.Schema({
 });
 
 const Message = mongoose.model('Message', messageSchema);
-
 
 // 文件上传路由
 app.post('/api/upload', upload.single('file'), async (req, res) => {
@@ -213,7 +214,9 @@ app.post('/api/login', async (req, res) => {
     });
 
     await Friend.create({ userId: newUser._id, friends: [] });
-    console.log(`[新用户注册] ${username} ID:${newUser._id}`);
+    console.log(`[新用户注册]
+$${username} ID:$$
+{newUser._id}`);
 
     res.status(HTTP_STATUS.CREATED).json({
       userId: newUser._id,
@@ -240,6 +243,7 @@ app.get('/api/user/:id', async (req, res) => {
     res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "服务器错误" });
   }
 });
+
 // 获取好友列表
 app.get('/api/friends', async (req, res) => {
   try {
@@ -284,6 +288,7 @@ app.get('/api/messages', async (req, res) => {
     res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "获取消息失败" });
   }
 });
+
 // 添加好友路由（最终修正版）
 app.post('/api/friends', async (req, res) => {
   try {
@@ -375,7 +380,7 @@ app.post('/api/friends', async (req, res) => {
     });
   }
 });
-// WebSocket处理
+
 // WebSocket处理
 const server = app.listen(process.env.PORT || 3000, '0.0.0.0', () => {
   console.log(`🚀 服务器运行中，端口：${server.address().port}`);
@@ -453,40 +458,40 @@ wss.on('connection', (ws, req) => {
         return;
       }
 
-    // 处理所有消息类型
-    if (['text', 'image', 'audio', 'emoji'].includes(msgData.type)) {
-      const newMessage = new Message({
-        from: msgData.from,
-        to: msgData.to,
-        content: msgData.content,
-        type: msgData.type,
-        fileUrl: msgData.fileUrl,
-        timestamp: new Date(msgData.timestamp || Date.now())
-      });
-      
-      await newMessage.save();
+      // 处理所有消息类型
+      if (['text', 'image', 'audio', 'emoji'].includes(msgData.type)) {
+        const newMessage = new Message({
+          from: msgData.from,
+          to: msgData.to,
+          content: msgData.content,
+          type: msgData.type,
+          fileUrl: msgData.fileUrl,
+          timestamp: new Date(msgData.timestamp || Date.now())
+        });
+        
+        await newMessage.save();
 
-      // 广播消息 - 确保包含所有必要字段
-      const messageToSend = {
-        ...newMessage.toObject(),
-        _id: newMessage._id.toString(),
-        timestamp: newMessage.timestamp.toISOString()
-      };
+        // 广播消息 - 确保包含所有必要字段
+        const messageToSend = {
+          ...newMessage.toObject(),
+          _id: newMessage._id.toString(),
+          timestamp: newMessage.timestamp.toISOString()
+        };
 
-      [msgData.to, msgData.from].forEach(targetId => {
-        const client = onlineUsers.get(targetId);
-        if (client && client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify({
-            type: 'message', // 统一为'message'类型
-            data: messageToSend
-          }));
-        }
-      });
+        [msgData.to, msgData.from].forEach(targetId => {
+          const client = onlineUsers.get(targetId);
+          if (client && client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({
+              type: 'message', // 统一为'message'类型
+              data: messageToSend
+            }));
+          }
+        });
+      }
+    } catch (error) {
+      console.error('WebSocket消息处理错误:', error);
     }
-  } catch (error) {
-    console.error('WebSocket消息处理错误:', error);
-  }
-});
+  });
 
   ws.on('close', async () => {
     clearInterval(interval);
@@ -496,8 +501,6 @@ wss.on('connection', (ws, req) => {
     }
   });
 });
-
-// 其他中间件和路由...
 
 // 优雅关闭
 const gracefulShutdown = () => {
