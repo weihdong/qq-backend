@@ -7,7 +7,13 @@ console.log('🛠️ 环境变量:', {
   PORT: process.env.PORT,
   MONGODB_URI: process.env.MONGODB_URI ? '已配置' : '未配置'
 });
-
+// 确保上传目录存在
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+// 提供静态文件访问
+app.use('/uploads', express.static(uploadDir));
 const express = require('express');
 const mongoose = require('mongoose');
 const WebSocket = require('ws');
@@ -109,11 +115,7 @@ const friendSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 const Friend = mongoose.model('Friend', friendSchema);
-// 确保上传目录存在
-const uploadDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
+
 
 // 配置文件上传
 const storage = multer.diskStorage({
@@ -131,8 +133,7 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 } // 10MB限制
 });
 
-// 提供静态文件访问
-app.use('/uploads', express.static(uploadDir));
+
 
 // 修改消息模型
 const messageSchema = new mongoose.Schema({
@@ -146,20 +147,22 @@ const messageSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
-  content: String, // 修改为可选
+  content: String,
   timestamp: {
     type: Date,
     default: Date.now
   },
-  type: { // 新增消息类型
+  type: {
     type: String,
     enum: ['text', 'image', 'audio', 'emoji'],
     default: 'text'
   },
-  fileUrl: String // 文件URL
+  fileUrl: String
 });
 
 const Message = mongoose.model('Message', messageSchema);
+
+
 // 文件上传路由
 app.post('/api/upload', upload.single('file'), async (req, res) => {
   try {
@@ -167,7 +170,8 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "未上传文件" });
     }
     
-    const fileUrl = `/uploads/${req.file.filename}`;
+    // 修复：确保URL包含完整路径
+    const fileUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
     res.json({ url: fileUrl });
   } catch (error) {
     console.error('文件上传错误:', error);
@@ -456,18 +460,25 @@ wss.on('connection', (ws, req) => {
         to: msgData.to,
         content: msgData.content,
         type: msgData.type,
-        fileUrl: msgData.fileUrl
+        fileUrl: msgData.fileUrl,
+        timestamp: new Date(msgData.timestamp || Date.now())
       });
       
       await newMessage.save();
 
-      // 广播消息
+      // 广播消息 - 确保包含所有必要字段
+      const messageToSend = {
+        ...newMessage.toObject(),
+        _id: newMessage._id.toString(),
+        timestamp: newMessage.timestamp.toISOString()
+      };
+
       [msgData.to, msgData.from].forEach(targetId => {
         const client = onlineUsers.get(targetId);
         if (client && client.readyState === WebSocket.OPEN) {
           client.send(JSON.stringify({
-            type: msgData.type,
-            ...newMessage.toJSON()
+            type: 'message', // 统一为'message'类型
+            data: messageToSend
           }));
         }
       });
