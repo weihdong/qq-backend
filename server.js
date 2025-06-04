@@ -214,9 +214,7 @@ app.post('/api/login', async (req, res) => {
     });
 
     await Friend.create({ userId: newUser._id, friends: [] });
-    console.log(`[新用户注册]
-$${username} ID:$$
-{newUser._id}`);
+    console.log(`[新用户注册]${username} ID:${newUser._id}`);
 
     res.status(HTTP_STATUS.CREATED).json({
       userId: newUser._id,
