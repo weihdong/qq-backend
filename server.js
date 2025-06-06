@@ -164,19 +164,22 @@ const messageSchema = new mongoose.Schema({
 
 const Message = mongoose.model('Message', messageSchema);
 
-// 文件上传路由
+// 修改文件上传路由（修复 HTTPS URL）
 app.post('/api/upload', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "未上传文件" });
+      return res.status(400).json({ error: "未上传文件" });
     }
     
-    // 修复：确保URL包含完整路径
-    const fileUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+    // 动态生成 HTTPS URL（适用于生产环境）
+    const isProduction = req.hostname.includes('085410.xyz');
+    const protocol = isProduction ? 'https' : 'http';
+    const fileUrl = `${protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+    
     res.json({ url: fileUrl });
   } catch (error) {
     console.error('文件上传错误:', error);
-    res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "上传失败" });
+    res.status(500).json({ error: "上传失败" });
   }
 });
 
@@ -430,58 +433,62 @@ wss.on('connection', (ws, req) => {
     console.log(`💓 心跳正常: ${userId}`);
   });
 
-  ws.on('message', async (message) => {
-    try {
-      const msgData = JSON.parse(message);
+// 修改 WebSocket 消息处理
+ws.on('message', async (message) => {
+  try {
+    const msgData = JSON.parse(message);
+    
+    // 视频信号处理 - 统一信号转发逻辑
+    if (msgData.type === 'video-signal') {
+      const targetUser = msgData.to;
+      const targetWs = onlineUsers.get(targetUser);
       
-      // 视频信号处理 - 直接转发给目标用户
-      if (msgData.type === 'video-signal') {
-        const targetUser = msgData.to;
-        const targetWs = onlineUsers.get(targetUser);
+      if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+        // 添加 from 字段确保接收方知道信号来源
+        const forwardData = {
+          ...msgData,
+          from: userId || msgData.from
+        };
         
-        // 统一处理所有视频信号类型
-        if (targetWs && targetWs.readyState === WebSocket.OPEN) {
-          const forwardData = {
-            ...msgData,
-            from: userId
-          };
-          
-          console.log(`转发视频信号: ${userId} -> ${targetUser}`, forwardData.type || forwardData.signalType);
-          targetWs.send(JSON.stringify(forwardData));
-        } else {
-          console.log(`目标用户 ${targetUser} 不在线，无法转发视频信号`);
-          
-          // 通知发送方对方不在线
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({
-              type: 'system',
-              message: `用户 ${targetUser} 不在线，无法建立视频通话`
-            }));
-          }
-        }
-        return;
-      }
-      // 合并处理 connect 类型消息
-      if (msgData.type === 'connect') {
-        // 清理旧连接
-        if (userId && onlineUsers.get(userId) === ws) {
-          onlineUsers.delete(userId);
-        }
+        console.log(`转发视频信号: ${userId} -> ${targetUser}`, forwardData.signalType);
+        targetWs.send(JSON.stringify(forwardData));
+      } else {
+        console.log(`目标用户 ${targetUser} 不在线`);
         
-        userId = msgData.userId;
-        onlineUsers.set(userId, ws);
-        ws.userId = userId;
-
-        // 发送连接确认
-        ws.send(JSON.stringify({
-          type: 'system',
-          message: 'CONNECTED'
-        }));
-
-        // 广播在线状态
-        await broadcastFriendStatus(userId, true);
-        return;
+        // 通知发送方对方不在线
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'system',
+            message: `用户 ${targetUser} 不在线，无法建立视频通话`
+          }));
+        }
       }
+      return;
+    }
+    
+    // 连接处理
+    if (msgData.type === 'connect') {
+      const newUserId = msgData.userId;
+      
+      // 清理旧连接
+      if (userId && onlineUsers.get(userId) === ws) {
+        onlineUsers.delete(userId);
+      }
+      
+      userId = newUserId;
+      onlineUsers.set(userId, ws);
+      ws.userId = userId;
+
+      // 发送连接确认
+      ws.send(JSON.stringify({
+        type: 'system',
+        message: 'CONNECTED'
+      }));
+
+      // 广播在线状态
+      await broadcastFriendStatus(userId, true);
+      return;
+    }
 
       // 处理所有消息类型
       if (['text', 'image', 'audio', 'emoji'].includes(msgData.type)) {
