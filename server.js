@@ -438,7 +438,19 @@ wss.on('connection', (ws, req) => {
       if (msgData.type === 'video-signal') {
         const targetUser = msgData.to;
         const targetWs = onlineUsers.get(targetUser);
-        
+          // 添加end-call特殊处理
+        if (msgData.signalType === 'end-call') {
+          console.log(`处理结束通话: ${userId} -> ${msgData.to}`);
+          const targetWs = onlineUsers.get(msgData.to);
+          if (targetWs) {
+            targetWs.send(JSON.stringify({
+              type: 'video-signal',
+              signalType: 'end-call',
+              from: userId
+            }));
+          }
+          return;
+        }
         if (targetWs && targetWs.readyState === WebSocket.OPEN) {
           // 添加发送者信息
           const forwardData = {
