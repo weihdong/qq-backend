@@ -433,7 +433,21 @@ wss.on('connection', (ws, req) => {
   ws.on('message', async (message) => {
     try {
       const msgData = JSON.parse(message);
-      
+      // 视频信号处理 - 直接转发给目标用户
+      if (msgData.type === 'video-signal') {
+        const targetUser = msgData.to;
+        const targetWs = onlineUsers.get(targetUser);
+        
+        if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+          targetWs.send(JSON.stringify({
+            ...msgData,
+            from: userId // 添加发送者ID
+          }));
+        } else {
+          console.log(`目标用户 ${targetUser} 不在线，无法转发视频信号`);
+        }
+        return;
+      }
       // 合并处理 connect 类型消息
       if (msgData.type === 'connect') {
         // 清理旧连接
