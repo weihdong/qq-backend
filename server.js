@@ -445,6 +445,26 @@ app.get('/api/messages', async (req, res) => {
   }
 });
 
+// 新增获取群成员接口
+app.get('/api/group-members', async (req, res) => {
+  try {
+    const { groupId } = req.query;
+    
+    if (!groupId) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "需要群聊ID" });
+    }
+    
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(HTTP_STATUS.NOT_FOUND).json({ error: "群聊不存在" });
+    }
+    
+    res.json({ members: group.members });
+  } catch (error) {
+    console.error('获取群成员失败:', error);
+    res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "获取群成员失败" });
+  }
+});
 // 添加好友路由（最终修正版）
 app.post('/api/friends', async (req, res) => {
   try {
@@ -592,7 +612,21 @@ wss.on('connection', (ws, req) => {
 ws.on('message', async (message) => {
   try {
     const msgData = JSON.parse(message);
-    
+    // 处理视频邀请
+    if (msgData.type === 'video-invite') {
+      // 转发给所有邀请成员
+      msgData.members.forEach(memberId => {
+        const client = onlineUsers.get(memberId);
+        if (client && client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify({
+            type: 'video-invite',
+            from: userId || msgData.from,
+            groupId: msgData.groupId
+          }));
+        }
+      });
+      return;
+    }
     // 群聊消息处理
     if (msgData.chatType === 'group') {
       const newMessage = new Message({
