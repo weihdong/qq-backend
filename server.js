@@ -289,6 +289,45 @@ app.get('/api/messages', async (req, res) => {
     res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "获取消息失败" });
   }
 });
+// 创建群聊
+app.post('/api/groups/create', async (req, res) => {
+  try {
+    const groupNumber = Math.floor(Math.random() * 900) + 100; // 生成3位数的群聊号
+    const group = new Group({
+      groupNumber,
+      members: [req.body.userId], // 初始将创建者加入群聊
+      createdAt: new Date()
+    });
+    await group.save();
+    res.status(200).json({ groupNumber });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('服务器错误');
+  }
+});
+
+// 加入群聊
+app.post('/api/groups/join', async (req, res) => {
+  try {
+    const { userId, groupNumber } = req.body;
+    const group = await Group.findOne({ groupNumber });
+
+    if (!group) {
+      return res.status(404).send('群聊不存在');
+    }
+
+    if (group.members.includes(userId)) {
+      return res.status(400).send('你已经是该群的成员');
+    }
+
+    group.members.push(userId);
+    await group.save();
+    res.status(200).json({ message: '加入群聊成功' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('服务器错误');
+  }
+});
 
 // 添加好友路由（最终修正版）
 app.post('/api/friends', async (req, res) => {
