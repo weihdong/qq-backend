@@ -592,6 +592,7 @@ wss.on('connection', (ws, req) => {
 ws.on('message', async (message) => {
   try {
     const msgData = JSON.parse(message);
+    
     // 群聊消息处理
     if (msgData.chatType === 'group') {
       const newMessage = new Message({
@@ -608,18 +609,16 @@ ws.on('message', async (message) => {
       // 广播给所有群成员
       group.members.forEach(member => {
         const memberId = member.userId.toString();
-        if (memberId !== msgData.from) { // 排除发送者
-          const client = onlineUsers.get(memberId);
-          if (client && client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify({
-              type: 'group-message',
-              data: {
-                ...newMessage.toObject(),
-                _id: newMessage._id.toString(),
-                timestamp: newMessage.timestamp.toISOString()
-              }
-            }));
-          }
+        const client = onlineUsers.get(memberId);
+        if (client && client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify({
+            type: 'group-message',
+            data: {
+              ...newMessage.toObject(),
+              _id: newMessage._id.toString(),
+              timestamp: newMessage.timestamp.toISOString()
+            }
+          }));
         }
       });
       
