@@ -57,11 +57,7 @@ app.options('*', cors());
 app.use(express.json({ limit: '10kb' }));
 
 app.use((req, res, next) => {
-  console.log(`[
-$${new Date().toISOString()}] $$
-{req.method}
-$${req.url} | Origin: $$
-{req.headers.origin}`);
+  console.log(`[${new Date().toISOString()}] ${req.method}${req.url} | Origin: ${req.headers.origin}`);
   next();
 });
 
@@ -78,7 +74,44 @@ mongoose.connect(MONGODB_URI, {
   console.error('❌ MongoDB连接失败:', err);
   process.exit(1);
 });
+// 新增群模型
+const groupSchema = new mongoose.Schema({
+  code: {
+    type: String,
+    required: true,
+    unique: true,
+    minlength: 3,
+    maxlength: 6
+  },
+  name: {
+    type: String,
+    required: true,
+    maxlength: 20
+  },
+  creator: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  members: [{
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true
+    },
+    username: String,
+    joinedAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
+}, { versionKey: false });
 
+const Group = mongoose.model('Group', groupSchema);
 // 用户模型
 const userSchema = new mongoose.Schema({
   username: { 
@@ -159,7 +192,12 @@ const messageSchema = new mongoose.Schema({
     enum: ['text', 'image', 'audio', 'emoji'],
     default: 'text'
   },
-  fileUrl: String
+  fileUrl: String,
+  chatType: {
+    type: String,
+    enum: ['private', 'group'],
+    default: 'private'
+  }
 });
 
 const Message = mongoose.model('Message', messageSchema);
@@ -244,6 +282,123 @@ app.get('/api/user/:id', async (req, res) => {
     res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "服务器错误" });
   }
 });
+// 创建群聊接口
+app.post('/api/groups', async (req, res) => {
+  try {
+    const { userId, groupName } = req.body;
+    
+    if (!userId) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "需要用户ID" });
+    }
+    
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(HTTP_STATUS.NOT_FOUND).json({ error: "用户不存在" });
+    }
+    
+    // 生成唯一群号
+    const generateGroupCode = () => {
+      const code = Math.floor(100 + Math.random() * 900).toString();
+      return Group.exists({ code }).then(exists => exists ? generateGroupCode() : code);
+    };
+    
+    const code = await generateGroupCode();
+    
+    const newGroup = await Group.create({
+      code,
+      name: groupName || `群聊${code}`,
+      creator: userId,
+      members: [{
+        userId,
+        username: user.username
+      }]
+    });
+    
+    res.status(HTTP_STATUS.CREATED).json({ group: newGroup });
+  } catch (error) {
+    console.error('创建群聊失败:', error);
+    res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "创建群聊失败" });
+  }
+});
+
+// 加入群聊接口
+app.post('/api/groups/join', async (req, res) => {
+  try {
+    const { userId, groupCode } = req.body;
+    
+    if (!userId || !groupCode) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "需要用户ID和群号" });
+    }
+    
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(HTTP_STATUS.NOT_FOUND).json({ error: "用户不存在" });
+    }
+    
+    const group = await Group.findOne({ code: groupCode });
+    if (!group) {
+      return res.status(HTTP_STATUS.NOT_FOUND).json({ error: "群聊不存在" });
+    }
+    
+    // 检查是否已经是群成员
+    const isMember = group.members.some(member => member.userId.equals(userId));
+    if (isMember) {
+      return res.status(HTTP_STATUS.CONFLICT).json({ error: "已在群聊中" });
+    }
+    
+    // 添加新成员
+    group.members.push({
+      userId,
+      username: user.username
+    });
+    
+    await group.save();
+    
+    res.status(HTTP_STATUS.OK).json({ group });
+  } catch (error) {
+    console.error('加入群聊失败:', error);
+    res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "加入群聊失败" });
+  }
+});
+
+// 获取用户群聊列表
+app.get('/api/groups', async (req, res) => {
+  try {
+    const { userId } = req.query;
+    
+    if (!userId) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "需要用户ID" });
+    }
+    
+    const groups = await Group.find({ 'members.userId': userId });
+    
+    res.json({ groups });
+  } catch (error) {
+    console.error('获取群聊列表失败:', error);
+    res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "获取群聊列表失败" });
+  }
+});
+
+// 获取群聊消息
+app.get('/api/group-messages', async (req, res) => {
+  try {
+    const { groupId } = req.query;
+    
+    if (!groupId) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: "需要群聊ID" });
+    }
+    
+    const messages = await Message.find({
+      to: groupId,
+      chatType: 'group'
+    }).sort({ timestamp: 1 }).lean();
+    
+    res.json(messages);
+  } catch (error) {
+    console.error('获取群消息失败:', error);
+    res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "获取群消息失败" });
+  }
+});
 
 // 获取好友列表
 app.get('/api/friends', async (req, res) => {
@@ -287,45 +442,6 @@ app.get('/api/messages', async (req, res) => {
   } catch (error) {
     console.error('获取消息错误:', error);
     res.status(HTTP_STATUS.INTERNAL_ERROR).json({ error: "获取消息失败" });
-  }
-});
-// 创建群聊
-app.post('/api/groups/create', async (req, res) => {
-  try {
-    const groupNumber = Math.floor(Math.random() * 900) + 100; // 生成3位数的群聊号
-    const group = new Group({
-      groupNumber,
-      members: [req.body.userId], // 初始将创建者加入群聊
-      createdAt: new Date()
-    });
-    await group.save();
-    res.status(200).json({ groupNumber });
-  } catch (err) {
-    console.error(err);
-    res.status(500).send('服务器错误');
-  }
-});
-
-// 加入群聊
-app.post('/api/groups/join', async (req, res) => {
-  try {
-    const { userId, groupNumber } = req.body;
-    const group = await Group.findOne({ groupNumber });
-
-    if (!group) {
-      return res.status(404).send('群聊不存在');
-    }
-
-    if (group.members.includes(userId)) {
-      return res.status(400).send('你已经是该群的成员');
-    }
-
-    group.members.push(userId);
-    await group.save();
-    res.status(200).json({ message: '加入群聊成功' });
-  } catch (err) {
-    console.error(err);
-    res.status(500).send('服务器错误');
   }
 });
 
@@ -476,7 +592,39 @@ wss.on('connection', (ws, req) => {
 ws.on('message', async (message) => {
   try {
     const msgData = JSON.parse(message);
-    
+    // 群聊消息处理
+    if (msgData.chatType === 'group') {
+      const newMessage = new Message({
+        ...msgData,
+        chatType: 'group'
+      });
+      
+      await newMessage.save();
+      
+      // 获取群成员
+      const group = await Group.findById(msgData.to);
+      if (!group) return;
+      
+      // 广播给所有群成员
+      group.members.forEach(member => {
+        const memberId = member.userId.toString();
+        if (memberId !== msgData.from) { // 排除发送者
+          const client = onlineUsers.get(memberId);
+          if (client && client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({
+              type: 'group-message',
+              data: {
+                ...newMessage.toObject(),
+                _id: newMessage._id.toString(),
+                timestamp: newMessage.timestamp.toISOString()
+              }
+            }));
+          }
+        }
+      });
+      
+      return;
+    }
     // 视频信号处理 - 确保转发所有类型
     if (msgData.type === 'video-signal') {
       const targetUser = msgData.to;
