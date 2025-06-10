@@ -719,7 +719,7 @@ ws.on('message', async (message) => {
       const targetWs = onlineUsers.get(targetUser);
       
       if (targetWs && targetWs.readyState === WebSocket.OPEN) {
-        // 确保包含发送方ID
+        // 添加发送方ID
         const forwardData = {
           ...msgData,
           from: userId || msgData.from
@@ -730,7 +730,7 @@ ws.on('message', async (message) => {
       } else {
         console.log(`目标用户 ${targetUser} 不在线，无法转发视频信号`);
         
-        // 通知发送方对方不在线
+        // 通知发送方
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({
             type: 'system',
@@ -738,8 +738,8 @@ ws.on('message', async (message) => {
           }));
         }
       }
-      return;
     }
+    
     
     // 连接处理
     if (msgData.type === 'connect') {
