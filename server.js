@@ -12,8 +12,6 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-
-
 console.log('🛠️ 环境变量:', {
   NODE_ENV: process.env.NODE_ENV,
   PORT: process.env.PORT,
@@ -546,8 +544,6 @@ const server = app.listen(process.env.PORT || 3000, '0.0.0.0', () => {
 
 const wss = new WebSocket.Server({ server });
 const onlineUsers = new Map();
-// 保存 userId => ws 映射
-const clients = new Map()
 const HEARTBEAT_INTERVAL = 30;
 
 // 新增：好友状态广播函数
@@ -592,113 +588,86 @@ wss.on('connection', (ws, req) => {
     console.log(`💓 心跳正常: ${userId}`);
   });
 
-  // 处理所有 WebSocket 消息
-  ws.on('message', async (message) => {
-    try {
-      const msgData = JSON.parse(message);
-
-      // 群聊消息
-      if (msgData.chatType === 'group') {
-        const newMessage = new Message({
-          ...msgData,
-          chatType: 'group'
-        });
-
-        await newMessage.save();
-
+// 修改 WebSocket 消息处理（确保转发所有信号）
+ws.on('message', async (message) => {
+  try {
+    const msgData = JSON.parse(message);
+    
+    // 群聊消息处理
+    if (msgData.chatType === 'group') {
+      const newMessage = new Message({
+        ...msgData,
+        chatType: 'group'
+      });
+      
+      await newMessage.save();
+      
+      // 获取群成员
+      const group = await Group.findById(msgData.to);
+      if (!group) return;
+      
+      // 广播给所有群成员
+      group.members.forEach(member => {
+        const memberId = member.userId.toString();
+        const client = onlineUsers.get(memberId);
+        if (client && client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify({
+            type: 'group-message',
+            data: {
+              ...newMessage.toObject(),
+              _id: newMessage._id.toString(),
+              timestamp: newMessage.timestamp.toISOString()
+            }
+          }));
+        }
+      });
+      
+      return;
+    }
+    // 视频信号处理 - 确保转发所有类型
+    if (msgData.type === 'video-signal') {
+      if (msgData.signalType === 'camera-state' || 
+          msgData.signalType === 'mic-state' || 
+          msgData.signalType === 'screen-share') {
+        // 广播状态变化
         const group = await Group.findById(msgData.to);
-        if (!group) return;
-
-        group.members.forEach(member => {
-          const memberId = member.userId.toString();
-          const client = onlineUsers.get(memberId);
-          if (client && client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify({
-              type: 'group-message',
-              data: {
-                ...newMessage.toObject(),
-                _id: newMessage._id.toString(),
-                timestamp: newMessage.timestamp.toISOString()
-              }
-            }));
-          }
-        });
-
-        return;
-      }
-
-      // ✅ 新增群聊视频信令转发
-      if (msgData.type === 'group-call-signal') {
-        const targetUser = msgData.to;
-        const targetWs = onlineUsers.get(targetUser);
-
-        if (targetWs && targetWs.readyState === WebSocket.OPEN) {
-          const forwardData = {
-            ...msgData,
-            from: userId || msgData.from
-          };
-
-          console.log(`🔄 转发群聊信令: ${forwardData.from} -> ${targetUser}`, msgData.signalType);
-          targetWs.send(JSON.stringify(forwardData));
-        } else {
-          console.log(`❌ 群聊信令目标 ${targetUser} 不在线`);
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({
-              type: 'system',
-              message: `用户 ${targetUser} 不在线，无法建立群聊通话`
-            }));
-          }
+        if (group) {
+          group.members.forEach(member => {
+            const memberId = member.userId.toString();
+            const client = onlineUsers.get(memberId);
+            if (client && client.readyState === WebSocket.OPEN) {
+              client.send(JSON.stringify({
+                type: 'video-signal',
+                ...msgData
+              }));
+            }
+          });
         }
-
-        return;
       }
-
-      // 私聊视频信令
-      if (msgData.type === 'video-signal') {
-        const targetUser = msgData.to;
-        const targetWs = onlineUsers.get(targetUser);
-
-        if (targetWs && targetWs.readyState === WebSocket.OPEN) {
-          const forwardData = {
-            ...msgData,
-            from: userId || msgData.from
-          };
-
-          console.log(`转发私聊视频信号: ${forwardData.from} -> ${targetUser}`, msgData.signalType);
-          targetWs.send(JSON.stringify(forwardData));
-        } else {
-          console.log(`❌ 私聊信令目标 ${targetUser} 不在线`);
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({
-              type: 'system',
-              message: `用户 ${targetUser} 不在线，无法建立视频通话`
-            }));
-          }
-        }
-
-        return;
+      return;
+    }
+    
+    // 连接处理
+    if (msgData.type === 'connect') {
+      // 清理旧连接（防止重复）
+      if (userId && onlineUsers.get(userId) === ws) {
+        onlineUsers.delete(userId);
       }
+      
+      userId = msgData.userId;
+      onlineUsers.set(userId, ws);
+      ws.userId = userId;
 
-      // 连接处理
-      if (msgData.type === 'connect') {
-        if (userId && onlineUsers.get(userId) === ws) {
-          onlineUsers.delete(userId);
-        }
+      ws.send(JSON.stringify({
+        type: 'system',
+        message: 'CONNECTED'
+      }));
 
-        userId = msgData.userId;
-        onlineUsers.set(userId, ws);
-        ws.userId = userId;
+      await broadcastFriendStatus(userId, true);
+      return;
+    }
 
-        ws.send(JSON.stringify({
-          type: 'system',
-          message: 'CONNECTED'
-        }));
-
-        await broadcastFriendStatus(userId, true);
-        return;
-      }
-
-      // 普通消息（文字、图片、音频、表情等）
+      // 处理所有消息类型
       if (['text', 'image', 'audio', 'emoji'].includes(msgData.type)) {
         const newMessage = new Message({
           from: msgData.from,
@@ -708,9 +677,10 @@ wss.on('connection', (ws, req) => {
           fileUrl: msgData.fileUrl,
           timestamp: new Date(msgData.timestamp || Date.now())
         });
-
+        
         await newMessage.save();
 
+        // 广播消息 - 确保包含所有必要字段
         const messageToSend = {
           ...newMessage.toObject(),
           _id: newMessage._id.toString(),
@@ -721,7 +691,7 @@ wss.on('connection', (ws, req) => {
           const client = onlineUsers.get(targetId);
           if (client && client.readyState === WebSocket.OPEN) {
             client.send(JSON.stringify({
-              type: 'message',
+              type: 'message', // 统一为'message'类型
               data: messageToSend
             }));
           }
@@ -740,7 +710,6 @@ wss.on('connection', (ws, req) => {
     }
   });
 });
-
 
 // 优雅关闭
 const gracefulShutdown = () => {
