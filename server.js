@@ -12,6 +12,8 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
+
+
 console.log('🛠️ 环境变量:', {
   NODE_ENV: process.env.NODE_ENV,
   PORT: process.env.PORT,
@@ -74,6 +76,89 @@ mongoose.connect(MONGODB_URI, {
   console.error('❌ MongoDB连接失败:', err);
   process.exit(1);
 });
+
+
+// 新增：会议状态存储
+const activeMeetings = new Map();
+// 新增：会议信令处理器
+function handleMeetingSignal(ws, signal) {
+  const { meetingId, userId, action, data } = signal;
+  
+  switch (action) {
+    case 'create':
+      // 创建新会议
+      activeMeetings.set(meetingId, {
+        participants: new Map([[userId, ws]]),
+        creator: userId
+      });
+      break;
+      
+    case 'join':
+      // 加入现有会议
+      const meeting = activeMeetings.get(meetingId);
+      if (meeting) {
+        meeting.participants.set(userId, ws);
+        
+        // 通知所有参与者有新成员加入
+        broadcastToMeeting(meetingId, {
+          type: 'meeting-signal',
+          action: 'participant-joined',
+          userId,
+          meetingId
+        });
+      }
+      break;
+      
+    case 'leave':
+      // 离开会议
+      const currentMeeting = activeMeetings.get(meetingId);
+      if (currentMeeting) {
+        currentMeeting.participants.delete(userId);
+        
+        // 通知所有参与者有成员离开
+        broadcastToMeeting(meetingId, {
+          type: 'meeting-signal',
+          action: 'participant-left',
+          userId,
+          meetingId
+        });
+        
+        // 如果会议为空则清理
+        if (currentMeeting.participants.size === 0) {
+          activeMeetings.delete(meetingId);
+        }
+      }
+      break;
+      
+    case 'offer':
+    case 'answer':
+    case 'candidate':
+      // 转发WebRTC信令给目标用户
+      const targetMeeting = activeMeetings.get(meetingId);
+      if (targetMeeting && targetMeeting.participants.has(data.targetUserId)) {
+        const targetWs = targetMeeting.participants.get(data.targetUserId);
+        if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+          targetWs.send(JSON.stringify({
+            ...signal,
+            senderId: userId
+          }));
+        }
+      }
+      break;
+  }
+}
+
+// 辅助函数：向会议所有成员广播消息
+function broadcastToMeeting(meetingId, message) {
+  const meeting = activeMeetings.get(meetingId);
+  if (meeting) {
+    for (const [participantId, participantWs] of meeting.participants) {
+      if (participantWs.readyState === WebSocket.OPEN) {
+        participantWs.send(JSON.stringify(message));
+      }
+    }
+  }
+}
 // 新增群模型
 const groupSchema = new mongoose.Schema({
   code: {
@@ -592,7 +677,11 @@ wss.on('connection', (ws, req) => {
 ws.on('message', async (message) => {
   try {
     const msgData = JSON.parse(message);
-    
+    // 会议信令处理
+    if (msgData.type === 'meeting-signal') {
+      handleMeetingSignal(ws, msgData);
+      return;
+    }
     // 群聊消息处理
     if (msgData.chatType === 'group') {
       const newMessage = new Message({
@@ -626,22 +715,27 @@ ws.on('message', async (message) => {
     }
     // 视频信号处理 - 确保转发所有类型
     if (msgData.type === 'video-signal') {
-      if (msgData.signalType === 'camera-state' || 
-          msgData.signalType === 'mic-state' || 
-          msgData.signalType === 'screen-share') {
-        // 广播状态变化
-        const group = await Group.findById(msgData.to);
-        if (group) {
-          group.members.forEach(member => {
-            const memberId = member.userId.toString();
-            const client = onlineUsers.get(memberId);
-            if (client && client.readyState === WebSocket.OPEN) {
-              client.send(JSON.stringify({
-                type: 'video-signal',
-                ...msgData
-              }));
-            }
-          });
+      const targetUser = msgData.to;
+      const targetWs = onlineUsers.get(targetUser);
+      
+      if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+        // 确保包含发送方ID
+        const forwardData = {
+          ...msgData,
+          from: userId || msgData.from
+        };
+        
+        console.log(`转发视频信号: ${userId} -> ${targetUser}`, forwardData.signalType);
+        targetWs.send(JSON.stringify(forwardData));
+      } else {
+        console.log(`目标用户 ${targetUser} 不在线，无法转发视频信号`);
+        
+        // 通知发送方对方不在线
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'system',
+            message: `用户 ${targetUser} 不在线，无法建立视频通话`
+          }));
         }
       }
       return;
