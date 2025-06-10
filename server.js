@@ -592,16 +592,38 @@ wss.on('connection', (ws, req) => {
 ws.on('message', async (message) => {
   try {
     const msgData = JSON.parse(message);
-    // 群视频信号处理
+    // 群视频信号处理 - 新增
     if (msgData.type === 'group-video-signal') {
-      const targetUser = msgData.to;
-      const targetWs = onlineUsers.get(targetUser);
-      
-      if (targetWs && targetWs.readyState === WebSocket.OPEN) {
-        targetWs.send(JSON.stringify({
-          ...msgData,
-          from: userId || msgData.from
-        }));
+      // 邀请信号需要广播给所有群成员
+      if (msgData.signalType === 'invite') {
+        const groupId = msgData.groupId;
+        const group = await Group.findById(groupId);
+        if (!group) return;
+        
+        // 广播给所有群成员（除了发起者）
+        group.members.forEach(member => {
+          const memberId = member.userId.toString();
+          if (memberId !== userId) {
+            const client = onlineUsers.get(memberId);
+            if (client && client.readyState === WebSocket.OPEN) {
+              client.send(JSON.stringify({
+                ...msgData,
+                from: userId
+              }));
+            }
+          }
+        });
+      } 
+      // 其他信号点对点转发
+      else {
+        const targetUser = msgData.to;
+        const targetWs = onlineUsers.get(targetUser);
+        if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+          targetWs.send(JSON.stringify({
+            ...msgData,
+            from: userId
+          }));
+        }
       }
       return;
     }
