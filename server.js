@@ -12,6 +12,10 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
+
+// 新增：通话房间管理
+const videoRooms = new Map()
+
 console.log('🛠️ 环境变量:', {
   NODE_ENV: process.env.NODE_ENV,
   PORT: process.env.PORT,
@@ -612,20 +616,93 @@ wss.on('connection', (ws, req) => {
 ws.on('message', async (message) => {
   try {
     const msgData = JSON.parse(message);
+    
     // 处理视频邀请
     if (msgData.type === 'video-invite') {
-      // 转发给所有邀请成员
-      msgData.members.forEach(memberId => {
-        const client = onlineUsers.get(memberId);
-        if (client && client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify({
-            type: 'video-invite',
-            from: userId || msgData.from,
-            groupId: msgData.groupId
-          }));
+      // 创建或更新房间
+      if (!videoRooms.has(msgData.roomId)) {
+        videoRooms.set(msgData.roomId, {
+          groupId: msgData.groupId,
+          participants: new Set()
+        })
+      }
+      
+      const room = videoRooms.get(msgData.roomId)
+      
+      // 获取群成员
+      const group = await Group.findById(msgData.groupId)
+      if (!group) return
+      
+      // 转发给所有群成员（除了发起者）
+      group.members.forEach(member => {
+        const memberId = member.userId.toString()
+        if (memberId !== msgData.from) {
+          const client = onlineUsers.get(memberId)
+          if (client && client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({
+              ...msgData,
+              from: msgData.from
+            }))
+          }
         }
-      });
-      return;
+      })
+      return
+    }
+    
+    // 处理加入房间信号
+    if (msgData.type === 'video-join') {
+      // 更新房间参与者
+      if (videoRooms.has(msgData.roomId)) {
+        const room = videoRooms.get(msgData.roomId)
+        room.participants.add(msgData.userId)
+        
+        // 广播给房间内所有参与者
+        room.participants.forEach(participantId => {
+          if (participantId !== msgData.userId) {
+            const client = onlineUsers.get(participantId)
+            if (client && client.readyState === WebSocket.OPEN) {
+              client.send(JSON.stringify({
+                type: 'video-join',
+                roomId: msgData.roomId,
+                userId: msgData.userId,
+                username: msgData.username
+              }))
+            }
+          }
+        })
+      }
+      return
+    }
+    
+    // 处理结束通话信号
+    if (msgData.type === 'video-end') {
+      // 从房间中移除参与者
+      if (videoRooms.has(msgData.roomId)) {
+        const room = videoRooms.get(msgData.roomId)
+        room.participants.delete(msgData.userId)
+        
+        // 如果房间空了，清理房间
+        if (room.participants.size === 0) {
+          videoRooms.delete(msgData.roomId)
+        }
+      }
+      return
+    }
+    
+    // 处理视频信号
+    if (msgData.type === 'video-signal') {
+      // 检查房间是否存在
+      if (!videoRooms.has(msgData.roomId)) {
+        console.log(`房间 ${msgData.roomId} 不存在，忽略信号`)
+        return
+      }
+      
+      // 直接转发给目标用户
+      const targetWs = onlineUsers.get(msgData.to)
+      if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+        targetWs.send(JSON.stringify(msgData))
+      }
+      return
     }
     // 群聊消息处理
     if (msgData.chatType === 'group') {
