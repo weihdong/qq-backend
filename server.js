@@ -592,7 +592,8 @@ wss.on('connection', (ws, req) => {
 ws.on('message', async (message) => {
   try {
     const msgData = JSON.parse(message);
-    // 群视频信号处理 - 新增
+    
+    // 群视频信号处理
     if (msgData.type === 'group-video-signal') {
       // 邀请信号需要广播给所有群成员
       if (msgData.signalType === 'invite') {
@@ -614,6 +615,17 @@ ws.on('message', async (message) => {
           }
         });
       } 
+      // +++ 处理新成员加入信号 +++
+      else if (msgData.signalType === 'new-member') {
+        const targetUser = msgData.to;
+        const targetWs = onlineUsers.get(targetUser);
+        if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+          targetWs.send(JSON.stringify({
+            ...msgData,
+            from: userId
+          }));
+        }
+      }
       // 其他信号点对点转发
       else {
         const targetUser = msgData.to;
